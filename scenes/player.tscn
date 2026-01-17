@@ -1,0 +1,22 @@
+[gd_scene load_steps=4 format=3 uid="uid://c1234567890a"]
+
+[ext_resource type="Script" path="res://scripts/player_controller.gd" id="1_player"]
+[ext_resource type="Texture2D" uid="uid://bk8v7x8h8r7qp" path="res://assets/Asset Packs/Characters/Basic Charakter Spritesheet.png" id="2_sprite"]
+
+[sub_resource type="CapsuleShape2D" id="CapsuleShape2D_player"]
+radius = 8.0
+height = 20.0
+
+[node name="Player" type="CharacterBody2D"]
+script = ExtResource("1_player")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+position = Vector2(0, 2)
+shape = SubResource("CapsuleShape2D_player")
+debug_color = Color(0, 0.6, 0.7, 0.42)
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+texture = ExtResource("2_sprite")
+hframes = 4
+vframes = 6
+frame = 1

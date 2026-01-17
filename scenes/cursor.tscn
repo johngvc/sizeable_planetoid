@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3 uid="uid://d3sduf2wh80n"]
+
+[ext_resource type="Script" uid="uid://8lgmt80mf7ip" path="res://scripts/cursor_controller.gd" id="1_cursor"]
+
+[node name="Cursor" type="Node2D" groups=["cursor"]]
+z_index = 100
+script = ExtResource("1_cursor")
+cursor_radius = 3.0
