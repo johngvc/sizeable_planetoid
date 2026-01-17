@@ -20,9 +20,6 @@ func _ready() -> void:
 	camera = get_tree().get_first_node_in_group("main_camera")
 	if camera == null:
 		camera = get_viewport().get_camera_2d()
-	
-	# Auto-start cursor mode
-	toggle_cursor()
 
 
 func _input(event: InputEvent) -> void:

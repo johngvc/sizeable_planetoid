@@ -163,6 +163,7 @@ func start_dragging_body(body: PhysicsBody2D, cursor_pos: Vector2) -> void:
 		rigid_body.gravity_scale = 0.0
 		rigid_body.linear_velocity = Vector2.ZERO
 		rigid_body.angular_velocity = 0.0
+		rigid_body.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC
 		rigid_body.freeze = true
 	# StaticBody2D doesn't need any special handling - it's already static
 
@@ -210,12 +211,21 @@ func release_selection() -> void:
 	if selected_body != null and is_instance_valid(selected_body):
 		if selected_body is RigidBody2D:
 			var rigid_body = selected_body as RigidBody2D
-			# Restore physics
-			rigid_body.freeze = false
-			rigid_body.gravity_scale = original_gravity_scale
-			# Give it a gentle release (no velocity)
-			rigid_body.linear_velocity = Vector2.ZERO
-			rigid_body.angular_velocity = 0.0
+			# Check if physics is paused - if so, keep frozen
+			var cursor_ui = get_tree().get_first_node_in_group("cursor_mode_ui")
+			var physics_paused = cursor_ui != null and cursor_ui.is_paused()
+			
+			if physics_paused:
+				# Keep frozen but restore gravity scale for when unpaused
+				rigid_body.gravity_scale = original_gravity_scale
+			else:
+				# Restore physics
+				rigid_body.freeze = false
+				rigid_body.freeze_mode = RigidBody2D.FREEZE_MODE_KINEMATIC
+				rigid_body.gravity_scale = original_gravity_scale
+				# Give it a gentle release (no velocity)
+				rigid_body.linear_velocity = Vector2.ZERO
+				rigid_body.angular_velocity = 0.0
 		# StaticBody2D doesn't need any restoration
 	
 	selected_body = null

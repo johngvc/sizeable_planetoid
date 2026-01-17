@@ -36,6 +36,10 @@ var is_draw_static_mode: bool = false  # false = dynamic (RigidBody2D), true = s
 # Debug visualization
 var debug_draw_collisions: bool = true
 
+# Physics pause state
+var is_physics_paused: bool = false
+var frozen_bodies_state: Dictionary = {}  # body -> { gravity_scale, linear_velocity, angular_velocity }
+
 
 func _ready() -> void:
 	# Add to group so other nodes can find us
@@ -55,9 +59,46 @@ func _ready() -> void:
 	if cursor_ui:
 		cursor_ui.tool_changed.connect(_on_tool_changed)
 		cursor_ui.material_changed.connect(_on_material_changed)
+		cursor_ui.physics_paused.connect(_on_physics_paused)
 		# Get initial material
 		if cursor_ui.get_current_material() != null:
 			_on_material_changed(cursor_ui.get_current_material())
+
+
+func _on_physics_paused(paused: bool) -> void:
+	is_physics_paused = paused
+	
+	# Clean up invalid bodies first
+	existing_drawn_bodies = existing_drawn_bodies.filter(func(body): return is_instance_valid(body))
+	
+	if paused:
+		# Freeze all dynamic bodies - store their state
+		frozen_bodies_state.clear()
+		for body in existing_drawn_bodies:
+			if is_instance_valid(body):
+				frozen_bodies_state[body] = {
+					"gravity_scale": body.gravity_scale,
+					"linear_velocity": body.linear_velocity,
+					"angular_velocity": body.angular_velocity
+				}
+				body.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC
+				body.freeze = true
+	else:
+		# Unfreeze all dynamic bodies - restore their state
+		for body in existing_drawn_bodies:
+			if is_instance_valid(body) and frozen_bodies_state.has(body):
+				var state = frozen_bodies_state[body]
+				body.freeze = false
+				body.freeze_mode = RigidBody2D.FREEZE_MODE_KINEMATIC
+				body.gravity_scale = state["gravity_scale"]
+				# Restore velocities for continuity
+				body.linear_velocity = state["linear_velocity"]
+				body.angular_velocity = state["angular_velocity"]
+			# Also unfreeze bodies that weren't in frozen state (created while paused)
+			elif is_instance_valid(body) and body.freeze:
+				body.freeze = false
+				body.freeze_mode = RigidBody2D.FREEZE_MODE_KINEMATIC
+		frozen_bodies_state.clear()
 
 
 func _on_material_changed(material: DrawMaterial) -> void:
@@ -795,6 +836,11 @@ func create_physics_body_for_points(points: Array, strokes: Array) -> void:
 			physics_body.add_child(visual_line)
 	
 	get_parent().add_child(physics_body)
+	
+	# If physics is paused, freeze this body immediately
+	if is_physics_paused:
+		physics_body.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC
+		physics_body.freeze = true
 	
 	# Track this body for future merging
 	existing_drawn_bodies.append(physics_body)

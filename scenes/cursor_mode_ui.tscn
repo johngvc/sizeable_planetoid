@@ -99,3 +99,32 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 13
 toggle_mode = true
 text = "🧱 Brick"
+
+[node name="PauseButton" type="Button" parent="."]
+unique_name_in_owner = true
+offset_left = 170.0
+offset_top = 10.0
+offset_right = 320.0
+offset_bottom = 50.0
+theme_override_font_sizes/font_size = 16
+toggle_mode = true
+text = "⏸️ Pause (P)"
+
+[node name="PauseIndicator" type="PanelContainer" parent="."]
+unique_name_in_owner = true
+visible = false
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -120.0
+offset_top = 10.0
+offset_right = -10.0
+offset_bottom = 60.0
+grow_horizontal = 0
+
+[node name="PauseLabel" type="Label" parent="PauseIndicator"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 20
+text = "⏸️ PAUSED"
+horizontal_alignment = 1
+vertical_alignment = 1

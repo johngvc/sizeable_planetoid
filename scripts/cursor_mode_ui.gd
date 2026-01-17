@@ -3,6 +3,7 @@ extends CanvasLayer
 
 signal tool_changed(tool_name: String)
 signal material_changed(material: DrawMaterial)
+signal physics_paused(paused: bool)
 
 @onready var cursor_mode_button: Button = %CursorModeButton
 @onready var tool_panel: PanelContainer = %ToolPanel
@@ -13,9 +14,12 @@ signal material_changed(material: DrawMaterial)
 @onready var stone_button: Button = %StoneButton
 @onready var metal_button: Button = %MetalButton
 @onready var brick_button: Button = %BrickButton
+@onready var pause_button: Button = %PauseButton
+@onready var pause_indicator: PanelContainer = %PauseIndicator
 
 var current_tool: String = "draw_dynamic"
 var current_material: DrawMaterial = null
+var is_physics_paused: bool = false
 
 # Material definitions
 var materials: Dictionary = {}
@@ -48,6 +52,9 @@ func _ready() -> void:
 	
 	# Connect cursor mode button
 	cursor_mode_button.pressed.connect(_on_cursor_mode_button_pressed)
+	
+	# Connect pause button
+	pause_button.pressed.connect(_on_pause_button_pressed)
 	
 	# Find cursor and connect to mode changes
 	await get_tree().process_frame
@@ -131,3 +138,23 @@ func get_current_tool() -> String:
 
 func get_current_material() -> DrawMaterial:
 	return current_material
+
+
+func _input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and event.keycode == KEY_P:
+		toggle_physics_pause()
+
+
+func _on_pause_button_pressed() -> void:
+	toggle_physics_pause()
+
+
+func toggle_physics_pause() -> void:
+	is_physics_paused = not is_physics_paused
+	pause_button.button_pressed = is_physics_paused
+	pause_indicator.visible = is_physics_paused
+	physics_paused.emit(is_physics_paused)
+
+
+func is_paused() -> bool:
+	return is_physics_paused
