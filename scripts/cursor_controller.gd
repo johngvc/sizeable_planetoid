@@ -1,5 +1,5 @@
 extends Node2D
-## Cursor controller - toggles with C key, moves with arrow keys
+## Cursor controller - toggles with C key, moves with arrow keys or mouse
 
 signal cursor_mode_changed(active: bool)
 
@@ -10,6 +10,7 @@ signal cursor_mode_changed(active: bool)
 var is_active: bool = false
 var cursor_position: Vector2 = Vector2.ZERO
 var camera: Camera2D = null
+var use_mouse: bool = true  # Enable mouse control
 
 
 func _ready() -> void:
@@ -24,6 +25,10 @@ func _ready() -> void:
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and event.keycode == KEY_C:
 		toggle_cursor()
+	
+	# Track mouse movement when cursor is active
+	if is_active and event is InputEventMouseMotion:
+		update_cursor_from_mouse()
 
 
 func toggle_cursor() -> void:
@@ -31,8 +36,10 @@ func toggle_cursor() -> void:
 	visible = is_active
 	
 	if is_active:
-		# Start cursor at center of screen (camera position)
-		if camera:
+		# Start cursor at mouse position if available, otherwise camera center
+		if use_mouse:
+			update_cursor_from_mouse()
+		elif camera:
 			cursor_position = camera.global_position
 		else:
 			cursor_position = get_viewport().get_visible_rect().size / 2
@@ -41,29 +48,54 @@ func toggle_cursor() -> void:
 	cursor_mode_changed.emit(is_active)
 
 
+func update_cursor_from_mouse() -> void:
+	# Convert mouse screen position to world position
+	var mouse_screen_pos = get_viewport().get_mouse_position()
+	
+	if camera:
+		var viewport_size = get_viewport().get_visible_rect().size
+		var zoom = camera.zoom
+		
+		# Calculate world position from screen position
+		var screen_center = viewport_size / 2.0
+		var offset_from_center = (mouse_screen_pos - screen_center) / zoom
+		cursor_position = camera.global_position + offset_from_center
+		
+		# Clamp to viewport bounds
+		var half_view = viewport_size / (2.0 * zoom)
+		var cam_pos = camera.global_position
+		cursor_position.x = clamp(cursor_position.x, cam_pos.x - half_view.x + cursor_radius, cam_pos.x + half_view.x - cursor_radius)
+		cursor_position.y = clamp(cursor_position.y, cam_pos.y - half_view.y + cursor_radius, cam_pos.y + half_view.y - cursor_radius)
+	else:
+		cursor_position = mouse_screen_pos
+	
+	global_position = cursor_position
+
+
 func _process(delta: float) -> void:
 	if not is_active:
 		return
 	
-	# Get cursor movement input
+	# Keyboard movement (in addition to mouse)
 	var direction := Vector2.ZERO
 	direction.x = Input.get_axis("ui_left", "ui_right")
 	direction.y = Input.get_axis("ui_up", "ui_down")
 	
-	# Move cursor
-	cursor_position += direction * cursor_speed * delta
-	
-	# Clamp cursor to camera viewport bounds
-	if camera:
-		var viewport_size = get_viewport().get_visible_rect().size
-		var zoom = camera.zoom
-		var half_view = viewport_size / (2.0 * zoom)
-		var cam_pos = camera.global_position
+	if direction != Vector2.ZERO:
+		# If using keyboard, move cursor
+		cursor_position += direction * cursor_speed * delta
 		
-		cursor_position.x = clamp(cursor_position.x, cam_pos.x - half_view.x + cursor_radius, cam_pos.x + half_view.x - cursor_radius)
-		cursor_position.y = clamp(cursor_position.y, cam_pos.y - half_view.y + cursor_radius, cam_pos.y + half_view.y - cursor_radius)
-	
-	global_position = cursor_position
+		# Clamp cursor to camera viewport bounds
+		if camera:
+			var viewport_size = get_viewport().get_visible_rect().size
+			var zoom = camera.zoom
+			var half_view = viewport_size / (2.0 * zoom)
+			var cam_pos = camera.global_position
+			
+			cursor_position.x = clamp(cursor_position.x, cam_pos.x - half_view.x + cursor_radius, cam_pos.x + half_view.x - cursor_radius)
+			cursor_position.y = clamp(cursor_position.y, cam_pos.y - half_view.y + cursor_radius, cam_pos.y + half_view.y - cursor_radius)
+		
+		global_position = cursor_position
 
 
 func _draw() -> void:

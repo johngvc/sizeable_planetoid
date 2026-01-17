@@ -1,10 +1,11 @@
-[gd_scene load_steps=6 format=3 uid="uid://d5555555555a"]
+[gd_scene load_steps=7 format=3 uid="uid://d5555555555a"]
 
 [ext_resource type="PackedScene" uid="uid://c1234567890a" path="res://scenes/player.tscn" id="1_player_scene"]
 [ext_resource type="PackedScene" uid="uid://b9876543210a" path="res://scenes/ground.tscn" id="2_ground_scene"]
 [ext_resource type="Script" path="res://scripts/camera_follow.gd" id="3_camera"]
 [ext_resource type="Texture2D" uid="uid://dh5j6k7l8m9n0o" path="res://assets/Asset Packs/Objects/Basic_Grass_Biom_things.png" id="4_bg"]
 [ext_resource type="PackedScene" uid="uid://ccursor123456" path="res://scenes/cursor.tscn" id="5_cursor"]
+[ext_resource type="PackedScene" uid="uid://cdrawmanager123" path="res://scenes/draw_manager.tscn" id="6_draw"]
 
 [node name="Main" type="Node2D"]
 
@@ -44,3 +45,5 @@ position = Vector2(0, 100)
 position = Vector2(0, 50)
 
 [node name="Cursor" parent="." instance=ExtResource("5_cursor")]
+
+[node name="DrawManager" parent="." instance=ExtResource("6_draw")]
