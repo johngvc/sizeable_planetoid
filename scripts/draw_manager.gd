@@ -146,55 +146,222 @@ func convert_strokes_to_physics() -> void:
 	# Clean up any freed bodies from the tracking list
 	existing_drawn_bodies = existing_drawn_bodies.filter(func(body): return is_instance_valid(body))
 	
-	# Determine which WHOLE strokes should merge with which bodies
-	# If ANY point in a stroke is near a body, the ENTIRE stroke merges with it
-	var strokes_to_merge_with_bodies: Dictionary = {}  # body -> Array of strokes
-	var remaining_strokes: Array = []
-	
+	# STEP 1: Find which strokes connect to which existing bodies
+	var stroke_to_bodies: Array = []  # For each stroke index, array of connected bodies
 	for stroke in all_strokes:
-		var target_body: RigidBody2D = null
-		
-		# Check if any point in this stroke is near an existing body
+		var connected_bodies: Array[RigidBody2D] = []
 		for point in stroke:
 			for body in existing_drawn_bodies:
 				if not is_instance_valid(body):
 					continue
-				if is_point_near_body(point, body):
-					target_body = body
+				if body not in connected_bodies and is_point_near_body(point, body):
+					connected_bodies.append(body)
+		stroke_to_bodies.append(connected_bodies)
+	
+	# STEP 2: Build stroke-to-stroke proximity (which strokes are near each other)
+	var stroke_count = all_strokes.size()
+	var stroke_parent: Array[int] = []
+	stroke_parent.resize(stroke_count)
+	for i in range(stroke_count):
+		stroke_parent[i] = i
+	
+	# Union-find helpers for strokes
+	var find_stroke = func(x: int) -> int:
+		var root = x
+		while stroke_parent[root] != root:
+			root = stroke_parent[root]
+		while stroke_parent[x] != root:
+			var next = stroke_parent[x]
+			stroke_parent[x] = root
+			x = next
+		return root
+	
+	var unite_strokes = func(a: int, b: int) -> void:
+		var ra = find_stroke.call(a)
+		var rb = find_stroke.call(b)
+		if ra != rb:
+			stroke_parent[ra] = rb
+	
+	# Unite strokes that are near each other (any point within MERGE_DISTANCE)
+	for i in range(stroke_count):
+		for j in range(i + 1, stroke_count):
+			if are_strokes_near(all_strokes[i], all_strokes[j]):
+				unite_strokes.call(i, j)
+	
+	# Also unite strokes that share a common body connection
+	for i in range(stroke_count):
+		for j in range(i + 1, stroke_count):
+			# Check if they share any common body
+			for body in stroke_to_bodies[i]:
+				if body in stroke_to_bodies[j]:
+					unite_strokes.call(i, j)
 					break
-			if target_body != null:
-				break
+	
+	# STEP 3: Group strokes by their union-find root
+	var stroke_groups: Dictionary = {}  # root_index -> Array of stroke indices
+	for i in range(stroke_count):
+		var root = find_stroke.call(i)
+		if not stroke_groups.has(root):
+			stroke_groups[root] = []
+		stroke_groups[root].append(i)
+	
+	# STEP 4: For each stroke group, collect all connected bodies
+	var final_groups: Array = []  # Array of { strokes: Array, bodies: Array[RigidBody2D] }
+	
+	for root in stroke_groups:
+		var stroke_indices: Array = stroke_groups[root]
+		var group_strokes: Array = []
+		var group_bodies: Array[RigidBody2D] = []
 		
-		if target_body != null:
-			# This entire stroke merges with the body
-			if not strokes_to_merge_with_bodies.has(target_body):
-				strokes_to_merge_with_bodies[target_body] = []
-			strokes_to_merge_with_bodies[target_body].append(stroke)
+		for idx in stroke_indices:
+			group_strokes.append(all_strokes[idx])
+			for body in stroke_to_bodies[idx]:
+				if body not in group_bodies:
+					group_bodies.append(body)
+		
+		final_groups.append({ "strokes": group_strokes, "bodies": group_bodies })
+	
+	# STEP 5: Now we need to also merge body groups that are connected via strokes
+	# Use union-find on bodies
+	var body_to_group: Dictionary = {}
+	var group_to_bodies: Dictionary = {}
+	var group_to_strokes: Dictionary = {}
+	var next_group_id = 0
+	
+	for body in existing_drawn_bodies:
+		body_to_group[body] = next_group_id
+		group_to_bodies[next_group_id] = [body]
+		group_to_strokes[next_group_id] = []
+		next_group_id += 1
+	
+	# Create a special group for strokes that don't connect to any body
+	var new_body_group_id = next_group_id
+	group_to_bodies[new_body_group_id] = []
+	group_to_strokes[new_body_group_id] = []
+	next_group_id += 1
+	
+	# Process each final group
+	for fg in final_groups:
+		var strokes_in_fg: Array = fg["strokes"]
+		var bodies_in_fg: Array = fg["bodies"]
+		
+		if bodies_in_fg.size() == 0:
+			# These strokes don't connect to any existing body - they'll form new bodies
+			for s in strokes_in_fg:
+				group_to_strokes[new_body_group_id].append(s)
 		else:
-			# This stroke doesn't merge with any existing body
-			remaining_strokes.append(stroke)
+			# Merge all bodies in this group together
+			var target_group = body_to_group[bodies_in_fg[0]]
+			
+			for i in range(1, bodies_in_fg.size()):
+				var other_body = bodies_in_fg[i]
+				var other_group = body_to_group[other_body]
+				
+				if other_group != target_group:
+					for body in group_to_bodies[other_group]:
+						body_to_group[body] = target_group
+						group_to_bodies[target_group].append(body)
+					for s in group_to_strokes[other_group]:
+						group_to_strokes[target_group].append(s)
+					group_to_bodies.erase(other_group)
+					group_to_strokes.erase(other_group)
+			
+			# Add all strokes from this group
+			for s in strokes_in_fg:
+				group_to_strokes[target_group].append(s)
 	
-	# Merge whole strokes into existing bodies
-	for body in strokes_to_merge_with_bodies:
-		merge_strokes_into_body(strokes_to_merge_with_bodies[body], body)
-	
-	# For remaining strokes, group by proximity and create new bodies
-	if remaining_strokes.size() > 0:
-		# Flatten remaining strokes into points for proximity grouping
-		var remaining_points: Array[Vector2] = []
-		for stroke in remaining_strokes:
-			for point in stroke:
-				remaining_points.append(point)
+	# STEP 6: Perform the actual merges
+	for group_id in group_to_bodies:
+		var bodies_in_group: Array = group_to_bodies[group_id]
+		var strokes_for_group: Array = group_to_strokes[group_id]
 		
-		# Group remaining points by proximity using union-find
-		var groups = group_points_by_proximity(remaining_points)
+		if strokes_for_group.is_empty():
+			continue
 		
-		# Create a physics body for each group
-		for group in groups:
-			if group.size() > 0:
-				create_physics_body_for_points(group, remaining_strokes)
+		if bodies_in_group.size() == 0:
+			# New strokes that don't connect to existing bodies - create new bodies
+			var all_points: Array[Vector2] = []
+			for stroke in strokes_for_group:
+				for point in stroke:
+					all_points.append(point)
+			
+			var point_groups = group_points_by_proximity(all_points)
+			for pg in point_groups:
+				if pg.size() > 0:
+					create_physics_body_for_points(pg, strokes_for_group)
+		elif bodies_in_group.size() == 1:
+			merge_strokes_into_body(strokes_for_group, bodies_in_group[0])
+		else:
+			combine_bodies_with_strokes(bodies_in_group, strokes_for_group)
 	
 	all_strokes.clear()
+
+
+func are_strokes_near(stroke_a: Array, stroke_b: Array) -> bool:
+	# Check if any point in stroke_a is within MERGE_DISTANCE of any point in stroke_b
+	for point_a in stroke_a:
+		for point_b in stroke_b:
+			if point_a.distance_to(point_b) <= MERGE_DISTANCE:
+				return true
+	return false
+
+
+func combine_bodies_with_strokes(bodies: Array, strokes: Array) -> void:
+	# Combine multiple RigidBody2D into one, including new strokes
+	if bodies.is_empty():
+		return
+	
+	# Use the first body as the primary (keep it)
+	var primary_body: RigidBody2D = bodies[0]
+	
+	# Collect all world-space data from other bodies
+	for i in range(1, bodies.size()):
+		var other_body: RigidBody2D = bodies[i]
+		if not is_instance_valid(other_body):
+			continue
+		
+		# Transfer collision shapes (convert to world space, then to primary's local space)
+		for child in other_body.get_children():
+			if child is CollisionShape2D:
+				var world_pos = other_body.to_global(child.position)
+				var collision = CollisionShape2D.new()
+				var shape = CircleShape2D.new()
+				shape.radius = DRAW_SIZE / 2.0
+				collision.shape = shape
+				collision.position = primary_body.to_local(world_pos)
+				primary_body.add_child(collision)
+			elif child is Line2D:
+				# Transfer Line2D visuals
+				var visual_line = Line2D.new()
+				visual_line.width = child.width
+				visual_line.default_color = child.default_color
+				visual_line.joint_mode = child.joint_mode
+				visual_line.begin_cap_mode = child.begin_cap_mode
+				visual_line.end_cap_mode = child.end_cap_mode
+				visual_line.antialiased = child.antialiased
+				visual_line.material = wood_material
+				
+				# Convert each point from other body's local to world to primary's local
+				for j in range(child.get_point_count()):
+					var local_point = child.get_point_position(j)
+					var world_point = other_body.to_global(local_point)
+					visual_line.add_point(primary_body.to_local(world_point))
+				
+				primary_body.add_child(visual_line)
+		
+		# Remove other body from tracking and free it
+		existing_drawn_bodies.erase(other_body)
+		other_body.queue_free()
+	
+	# Now add the new strokes to the primary body
+	merge_strokes_into_body(strokes, primary_body)
+	
+	# Update mass
+	var collision_count = 0
+	for child in primary_body.get_children():
+		if child is CollisionShape2D:
+			collision_count += 1
+	primary_body.mass = max(1.0, collision_count * 0.1)
 
 
 func is_point_near_body(point: Vector2, body: RigidBody2D) -> bool:
