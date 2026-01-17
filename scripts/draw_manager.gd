@@ -14,15 +14,17 @@ var world_uv_shader: Shader = null
 var current_draw_material: DrawMaterial = null
 
 # Strokes - each stroke is a separate continuous line
-# Each entry is a dictionary with "points" (Array[Vector2]), "material" (DrawMaterial), "is_static" (bool)
-var all_strokes: Array = []  # Array of { points: Array[Vector2], material: DrawMaterial, shader_material: ShaderMaterial, is_static: bool }
+# Each entry is a dictionary with "points" (Array[Vector2]), "material" (DrawMaterial), "is_static" (bool), "brush_shape" (String)
+var all_strokes: Array = []  # Array of { points: Array[Vector2], material: DrawMaterial, shader_material: ShaderMaterial, is_static: bool, brush_shape: String }
 var current_stroke: Array[Vector2] = []  # The stroke currently being drawn
 var current_stroke_material: DrawMaterial = null  # Material for current stroke
 var current_stroke_shader: ShaderMaterial = null  # Shader material for current stroke
 var current_stroke_is_static: bool = false  # Whether current stroke is static
+var current_stroke_brush_shape: String = "circle"  # Brush shape for current stroke
 var last_draw_position: Vector2 = Vector2.ZERO
-var preview_lines: Array[Line2D] = []  # One Line2D per stroke for preview
-var current_preview_line: Line2D = null  # Line2D for the current stroke being drawn
+var preview_nodes: Array[Node2D] = []  # One preview node per stroke (Line2D for circles, Node2D with ColorRects for squares)
+var current_preview_node: Node2D = null  # Preview node for the current stroke being drawn
+var current_preview_line: Line2D = null  # Line2D for circle brush preview (child of current_preview_node or same node)
 var is_currently_drawing: bool = false
 
 # Track all existing drawn physics bodies for merging
@@ -32,6 +34,9 @@ var existing_static_bodies: Array[StaticBody2D] = []  # Static bodies
 # Tool state - only draw when draw tool is active
 var is_draw_tool_active: bool = true
 var is_draw_static_mode: bool = false  # false = dynamic (RigidBody2D), true = static (StaticBody2D)
+
+# Brush shape state
+var current_brush_shape: String = "circle"  # "circle" or "square"
 
 # Debug visualization
 var debug_draw_collisions: bool = true
@@ -60,9 +65,11 @@ func _ready() -> void:
 		cursor_ui.tool_changed.connect(_on_tool_changed)
 		cursor_ui.material_changed.connect(_on_material_changed)
 		cursor_ui.physics_paused.connect(_on_physics_paused)
-		# Get initial material
+		cursor_ui.brush_shape_changed.connect(_on_brush_shape_changed)
+		# Get initial values
 		if cursor_ui.get_current_material() != null:
 			_on_material_changed(cursor_ui.get_current_material())
+		current_brush_shape = cursor_ui.get_current_brush_shape()
 
 
 func _on_physics_paused(paused: bool) -> void:
@@ -105,6 +112,10 @@ func _on_material_changed(material: DrawMaterial) -> void:
 	current_draw_material = material
 
 
+func _on_brush_shape_changed(shape: String) -> void:
+	current_brush_shape = shape
+
+
 func create_shader_material_for(material: DrawMaterial) -> ShaderMaterial:
 	# Create a NEW shader material instance for the given material
 	var shader_mat = ShaderMaterial.new()
@@ -130,15 +141,18 @@ func _on_tool_changed(tool_name: String) -> void:
 				"points": current_stroke.duplicate(),
 				"material": current_stroke_material,
 				"shader_material": current_stroke_shader,
-				"is_static": current_stroke_is_static
+				"is_static": current_stroke_is_static,
+				"brush_shape": current_stroke_brush_shape
 			})
-			if current_preview_line != null:
-				preview_lines.append(current_preview_line)
+			if current_preview_node != null:
+				preview_nodes.append(current_preview_node)
+				current_preview_node = null
 				current_preview_line = null
 		current_stroke = []
 		current_stroke_material = null
 		current_stroke_shader = null
 		current_stroke_is_static = false
+		current_stroke_brush_shape = "circle"
 		is_currently_drawing = false
 
 
@@ -179,6 +193,7 @@ func _process(_delta: float) -> void:
 			current_stroke_material = current_draw_material
 			current_stroke_shader = create_shader_material_for(current_draw_material)
 			current_stroke_is_static = is_draw_static_mode
+			current_stroke_brush_shape = current_brush_shape
 			start_new_stroke_preview()
 			add_brush_point(draw_pos)
 			last_draw_position = draw_pos
@@ -200,16 +215,19 @@ func _process(_delta: float) -> void:
 					"points": current_stroke.duplicate(),
 					"material": current_stroke_material,
 					"shader_material": current_stroke_shader,
-					"is_static": current_stroke_is_static
+					"is_static": current_stroke_is_static,
+					"brush_shape": current_stroke_brush_shape
 				})
-				# Keep the preview line for this finished stroke
-				if current_preview_line != null:
-					preview_lines.append(current_preview_line)
+				# Keep the preview node for this finished stroke
+				if current_preview_node != null:
+					preview_nodes.append(current_preview_node)
+					current_preview_node = null
 					current_preview_line = null
 			current_stroke = []
 			current_stroke_material = null
 			current_stroke_shader = null
 			current_stroke_is_static = false
+			current_stroke_brush_shape = "circle"
 			is_currently_drawing = false
 	
 	# Update debug draw
@@ -218,31 +236,48 @@ func _process(_delta: float) -> void:
 
 
 func start_new_stroke_preview() -> void:
-	current_preview_line = Line2D.new()
-	current_preview_line.width = DRAW_SIZE
-	current_preview_line.default_color = Color(1.0, 1.0, 1.0, 1.0)
-	current_preview_line.joint_mode = Line2D.LINE_JOINT_ROUND
-	current_preview_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
-	current_preview_line.end_cap_mode = Line2D.LINE_CAP_ROUND
-	current_preview_line.antialiased = true
-	# Use the stroke-specific shader material (cloned at stroke start)
-	current_preview_line.material = current_stroke_shader
-	get_parent().add_child(current_preview_line)
+	if current_stroke_brush_shape == "square":
+		# For squares, create a container node that will hold ColorRects
+		current_preview_node = Node2D.new()
+		get_parent().add_child(current_preview_node)
+		current_preview_line = null
+	else:
+		# For circles, use Line2D
+		current_preview_line = Line2D.new()
+		current_preview_line.width = DRAW_SIZE
+		current_preview_line.default_color = Color(1.0, 1.0, 1.0, 1.0)
+		configure_line2d_for_brush(current_preview_line, current_stroke_brush_shape)
+		current_preview_line.antialiased = true
+		current_preview_line.material = current_stroke_shader
+		get_parent().add_child(current_preview_line)
+		current_preview_node = current_preview_line
 
 
 func add_brush_point(pos: Vector2) -> void:
 	current_stroke.append(pos)
-	update_current_preview_line()
+	update_current_preview()
 
 
-func update_current_preview_line() -> void:
-	if current_preview_line == null:
+func update_current_preview() -> void:
+	if current_stroke.size() == 0:
 		return
 	
-	# Add the latest point to the current stroke's preview line
-	if current_stroke.size() > 0:
-		var last_point = current_stroke[current_stroke.size() - 1]
-		current_preview_line.add_point(last_point)
+	var last_point = current_stroke[current_stroke.size() - 1]
+	
+	if current_stroke_brush_shape == "square":
+		# Add a new ColorRect for this point
+		if current_preview_node != null:
+			var half_size = DRAW_SIZE / 2.0
+			var square = ColorRect.new()
+			square.size = Vector2(DRAW_SIZE, DRAW_SIZE)
+			square.position = last_point - Vector2(half_size, half_size)
+			square.color = Color.WHITE
+			square.material = current_stroke_shader
+			current_preview_node.add_child(square)
+	else:
+		# Add point to Line2D
+		if current_preview_line != null:
+			current_preview_line.add_point(last_point)
 
 
 func _on_cursor_mode_changed(active: bool) -> void:
@@ -253,27 +288,30 @@ func _on_cursor_mode_changed(active: bool) -> void:
 				"points": current_stroke.duplicate(),
 				"material": current_stroke_material,
 				"shader_material": current_stroke_shader,
-				"is_static": current_stroke_is_static
+				"is_static": current_stroke_is_static,
+				"brush_shape": current_stroke_brush_shape
 			})
 		is_currently_drawing = false
 		current_stroke = []
 		current_stroke_material = null
 		current_stroke_shader = null
 		current_stroke_is_static = false
+		current_stroke_brush_shape = "circle"
 		
 		if all_strokes.size() > 0:
 			convert_strokes_to_physics()
 
 
 func convert_strokes_to_physics() -> void:
-	# Remove all preview lines
-	for line in preview_lines:
-		if is_instance_valid(line):
-			line.queue_free()
-	preview_lines.clear()
+	# Remove all preview nodes
+	for node in preview_nodes:
+		if is_instance_valid(node):
+			node.queue_free()
+	preview_nodes.clear()
 	
-	if current_preview_line != null:
-		current_preview_line.queue_free()
+	if current_preview_node != null:
+		current_preview_node.queue_free()
+		current_preview_node = null
 		current_preview_line = null
 	
 	if all_strokes.is_empty():
@@ -299,10 +337,44 @@ func convert_strokes_to_physics() -> void:
 	all_strokes.clear()
 
 
+func create_collision_shape_for_brush(brush_shape: String) -> Shape2D:
+	## Creates the appropriate collision shape based on brush type
+	var half_size = DRAW_SIZE / 2.0
+	if brush_shape == "square":
+		var rect_shape = RectangleShape2D.new()
+		rect_shape.size = Vector2(DRAW_SIZE, DRAW_SIZE)
+		return rect_shape
+	else:  # Default to circle
+		var circle_shape = CircleShape2D.new()
+		circle_shape.radius = half_size
+		return circle_shape
+
+
+func configure_line2d_for_brush(line: Line2D, brush_shape: String) -> void:
+	## Configures Line2D cap and joint modes based on brush shape
+	## Note: For circles only - squares use create_square_visuals instead
+	line.joint_mode = Line2D.LINE_JOINT_ROUND
+	line.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	line.end_cap_mode = Line2D.LINE_CAP_ROUND
+
+
+func create_square_visuals(points: Array, shader_mat: ShaderMaterial, parent: Node) -> void:
+	## Creates axis-aligned square sprites for each point (for square brush)
+	var half_size = DRAW_SIZE / 2.0
+	for point in points:
+		var square = ColorRect.new()
+		square.size = Vector2(DRAW_SIZE, DRAW_SIZE)
+		square.position = point - Vector2(half_size, half_size)
+		square.color = Color.WHITE
+		square.material = shader_mat
+		parent.add_child(square)
+
+
 func create_static_body_for_stroke(stroke_data: Dictionary) -> void:
 	var stroke_points = stroke_data["points"]
 	var stroke_material = stroke_data["material"]
 	var stroke_shader = stroke_data["shader_material"]
+	var brush_shape = stroke_data.get("brush_shape", "circle")
 	
 	if stroke_points.is_empty():
 		return
@@ -320,9 +392,7 @@ func create_static_body_for_stroke(stroke_data: Dictionary) -> void:
 	# Create collision shapes for each point
 	for point in stroke_points:
 		var collision = CollisionShape2D.new()
-		var shape = CircleShape2D.new()
-		shape.radius = DRAW_SIZE / 2.0
-		collision.shape = shape
+		collision.shape = create_collision_shape_for_brush(brush_shape)
 		collision.position = point - center
 		
 		# Store material metadata
@@ -331,22 +401,34 @@ func create_static_body_for_stroke(stroke_data: Dictionary) -> void:
 			density = stroke_material.density
 		collision.set_meta("density", density)
 		collision.set_meta("material", stroke_material)
+		collision.set_meta("brush_shape", brush_shape)
 		static_body.add_child(collision)
 	
-	# Create Line2D visual
-	var visual_line = Line2D.new()
-	visual_line.width = DRAW_SIZE
-	visual_line.default_color = Color(1.0, 1.0, 1.0, 1.0)
-	visual_line.joint_mode = Line2D.LINE_JOINT_ROUND
-	visual_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
-	visual_line.end_cap_mode = Line2D.LINE_CAP_ROUND
-	visual_line.antialiased = true
-	visual_line.material = stroke_shader
+	# Create visual based on brush shape
+	if brush_shape == "square":
+		# Create axis-aligned squares for each point (relative to center)
+		var half_size = DRAW_SIZE / 2.0
+		for point in stroke_points:
+			var square = ColorRect.new()
+			square.size = Vector2(DRAW_SIZE, DRAW_SIZE)
+			square.position = (point - center) - Vector2(half_size, half_size)
+			square.color = Color.WHITE
+			square.material = stroke_shader
+			static_body.add_child(square)
+	else:
+		# Use Line2D for circle brush
+		var visual_line = Line2D.new()
+		visual_line.width = DRAW_SIZE
+		visual_line.default_color = Color(1.0, 1.0, 1.0, 1.0)
+		configure_line2d_for_brush(visual_line, brush_shape)
+		visual_line.antialiased = true
+		visual_line.material = stroke_shader
+		
+		for point in stroke_points:
+			visual_line.add_point(point - center)
+		
+		static_body.add_child(visual_line)
 	
-	for point in stroke_points:
-		visual_line.add_point(point - center)
-	
-	static_body.add_child(visual_line)
 	get_parent().add_child(static_body)
 	
 	# Track for debug draw
@@ -541,15 +623,16 @@ func combine_bodies_with_strokes(bodies: Array, strokes: Array) -> void:
 			if child is CollisionShape2D:
 				var world_pos = other_body.to_global(child.position)
 				var collision = CollisionShape2D.new()
-				var shape = CircleShape2D.new()
-				shape.radius = DRAW_SIZE / 2.0
-				collision.shape = shape
+				# Preserve the shape type from original
+				var brush_shape = child.get_meta("brush_shape") if child.has_meta("brush_shape") else "circle"
+				collision.shape = create_collision_shape_for_brush(brush_shape)
 				collision.position = primary_body.to_local(world_pos)
 				# Preserve material metadata from original collision
 				if child.has_meta("density"):
 					collision.set_meta("density", child.get_meta("density"))
 				if child.has_meta("material"):
 					collision.set_meta("material", child.get_meta("material"))
+				collision.set_meta("brush_shape", brush_shape)
 				primary_body.add_child(collision)
 			elif child is Line2D:
 				# Transfer Line2D visuals - preserve original material!
@@ -569,6 +652,16 @@ func combine_bodies_with_strokes(bodies: Array, strokes: Array) -> void:
 					visual_line.add_point(primary_body.to_local(world_point))
 				
 				primary_body.add_child(visual_line)
+			elif child is ColorRect:
+				# Transfer ColorRect visuals (for square brush) - preserve original material!
+				var world_pos = other_body.to_global(child.position + child.size / 2.0)
+				var local_pos = primary_body.to_local(world_pos)
+				var square = ColorRect.new()
+				square.size = child.size
+				square.position = local_pos - child.size / 2.0
+				square.color = child.color
+				square.material = child.material
+				primary_body.add_child(square)
 		
 		# Remove other body from tracking and free it
 		existing_drawn_bodies.erase(other_body)
@@ -626,6 +719,7 @@ func merge_strokes_into_body(strokes: Array, body: RigidBody2D) -> void:
 		var stroke_points = stroke_data["points"]
 		var stroke_material = stroke_data["material"]
 		var stroke_shader = stroke_data["shader_material"]
+		var brush_shape = stroke_data.get("brush_shape", "circle")
 		
 		if stroke_points.is_empty():
 			continue
@@ -649,31 +743,41 @@ func merge_strokes_into_body(strokes: Array, body: RigidBody2D) -> void:
 			else:
 				# Create new collision shape
 				var collision = CollisionShape2D.new()
-				var shape = CircleShape2D.new()
-				shape.radius = DRAW_SIZE / 2.0
-				collision.shape = shape
+				collision.shape = create_collision_shape_for_brush(brush_shape)
 				collision.position = local_pos
 				# Store material metadata on collision shape
 				collision.set_meta("density", new_density)
 				collision.set_meta("material", stroke_material)
+				collision.set_meta("brush_shape", brush_shape)
 				body.add_child(collision)
 				mass_delta += new_density * 0.1
 		
-		# Add a Line2D visual for this entire stroke with its own material
-		var visual_line = Line2D.new()
-		visual_line.width = DRAW_SIZE
-		visual_line.default_color = Color(1.0, 1.0, 1.0, 1.0)
-		visual_line.joint_mode = Line2D.LINE_JOINT_ROUND
-		visual_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
-		visual_line.end_cap_mode = Line2D.LINE_CAP_ROUND
-		visual_line.antialiased = true
-		visual_line.material = stroke_shader  # Use stroke's own shader material
-		
-		# Add all points in stroke order, converted to body's local space
-		for point in stroke_points:
-			visual_line.add_point(body.to_local(point))
-		
-		body.add_child(visual_line)
+		# Add visual based on brush shape
+		if brush_shape == "square":
+			# Create axis-aligned squares for each point
+			var half_size = DRAW_SIZE / 2.0
+			for point in stroke_points:
+				var local_pos = body.to_local(point)
+				var square = ColorRect.new()
+				square.size = Vector2(DRAW_SIZE, DRAW_SIZE)
+				square.position = local_pos - Vector2(half_size, half_size)
+				square.color = Color.WHITE
+				square.material = stroke_shader
+				body.add_child(square)
+		else:
+			# Use Line2D for circle brush
+			var visual_line = Line2D.new()
+			visual_line.width = DRAW_SIZE
+			visual_line.default_color = Color(1.0, 1.0, 1.0, 1.0)
+			configure_line2d_for_brush(visual_line, brush_shape)
+			visual_line.antialiased = true
+			visual_line.material = stroke_shader  # Use stroke's own shader material
+			
+			# Add all points in stroke order, converted to body's local space
+			for point in stroke_points:
+				visual_line.add_point(body.to_local(point))
+			
+			body.add_child(visual_line)
 	
 	# Update mass with net change
 	body.mass = max(0.1, body.mass + mass_delta)
@@ -791,12 +895,15 @@ func create_physics_body_for_points(points: Array, strokes: Array) -> void:
 	for p in points:
 		points_set[p] = true
 	
-	# Create circle collision for each point with material metadata
+	# Create collision shape for each point with material metadata
 	for point in points:
 		var collision = CollisionShape2D.new()
-		var shape = CircleShape2D.new()
-		shape.radius = DRAW_SIZE / 2.0
-		collision.shape = shape
+		
+		# Get brush shape from the stroke this point belongs to
+		var brush_shape = "circle"
+		if point_to_stroke.has(point):
+			brush_shape = point_to_stroke[point].get("brush_shape", "circle")
+		collision.shape = create_collision_shape_for_brush(brush_shape)
 		collision.position = point - center
 		
 		# Store material metadata on collision shape
@@ -807,12 +914,14 @@ func create_physics_body_for_points(points: Array, strokes: Array) -> void:
 			density = mat.density
 		collision.set_meta("density", density)
 		collision.set_meta("material", mat)
+		collision.set_meta("brush_shape", brush_shape)
 		physics_body.add_child(collision)
 	
-	# Create separate Line2D for each stroke that has points in this group
+	# Create separate visuals for each stroke that has points in this group
 	for stroke_data in strokes:
 		var stroke_points = stroke_data["points"]
 		var stroke_shader = stroke_data["shader_material"]
+		var stroke_brush_shape = stroke_data.get("brush_shape", "circle")
 		
 		var stroke_points_in_group: Array[Vector2] = []
 		for point in stroke_points:
@@ -820,20 +929,30 @@ func create_physics_body_for_points(points: Array, strokes: Array) -> void:
 				stroke_points_in_group.append(point)
 		
 		if stroke_points_in_group.size() > 0:
-			var visual_line = Line2D.new()
-			visual_line.width = DRAW_SIZE
-			visual_line.default_color = Color(1.0, 1.0, 1.0, 1.0)
-			visual_line.joint_mode = Line2D.LINE_JOINT_ROUND
-			visual_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
-			visual_line.end_cap_mode = Line2D.LINE_CAP_ROUND
-			visual_line.antialiased = true
-			visual_line.material = stroke_shader  # Use stroke's own shader material
-			
-			# Add points in stroke order
-			for point in stroke_points_in_group:
-				visual_line.add_point(point - center)
-			
-			physics_body.add_child(visual_line)
+			if stroke_brush_shape == "square":
+				# Create axis-aligned squares for each point
+				var half_size = DRAW_SIZE / 2.0
+				for point in stroke_points_in_group:
+					var square = ColorRect.new()
+					square.size = Vector2(DRAW_SIZE, DRAW_SIZE)
+					square.position = (point - center) - Vector2(half_size, half_size)
+					square.color = Color.WHITE
+					square.material = stroke_shader
+					physics_body.add_child(square)
+			else:
+				# Use Line2D for circle brush
+				var visual_line = Line2D.new()
+				visual_line.width = DRAW_SIZE
+				visual_line.default_color = Color(1.0, 1.0, 1.0, 1.0)
+				configure_line2d_for_brush(visual_line, stroke_brush_shape)
+				visual_line.antialiased = true
+				visual_line.material = stroke_shader  # Use stroke's own shader material
+				
+				# Add points in stroke order
+				for point in stroke_points_in_group:
+					visual_line.add_point(point - center)
+				
+				physics_body.add_child(visual_line)
 	
 	get_parent().add_child(physics_body)
 	
@@ -929,21 +1048,18 @@ func _draw() -> void:
 	# Clean up static bodies list
 	existing_static_bodies = existing_static_bodies.filter(func(body): return is_instance_valid(body))
 	
-	# Draw debug circles for all collision shapes on dynamic bodies
+	# Draw debug shapes for all collision shapes on dynamic bodies
 	for body in existing_drawn_bodies:
 		if not is_instance_valid(body):
 			continue
+		
+		var body_rotation = body.global_rotation
 		
 		for child in body.get_children():
 			if child is CollisionShape2D:
 				# Get world position of collision shape
 				var world_pos = body.to_global(child.position)
 				var local_pos = to_local(world_pos)
-				
-				# Get radius from shape
-				var radius = DRAW_SIZE / 2.0
-				if child.shape is CircleShape2D:
-					radius = child.shape.radius
 				
 				# Color based on material density
 				var density = get_collision_density(child)
@@ -955,13 +1071,32 @@ func _draw() -> void:
 				else:
 					color = Color(0.4, 0.4, 0.4, 0.9)  # Dark gray for stone/brick
 				
-				# Draw circle outline
-				draw_arc(local_pos, radius, 0, TAU, 16, color, 3.0)
+				# Draw shape outline based on type
+				if child.shape is CircleShape2D:
+					var radius = child.shape.radius
+					draw_arc(local_pos, radius, 0, TAU, 16, color, 3.0)
+				elif child.shape is RectangleShape2D:
+					# Draw rotated rectangle as polygon
+					var half_size = child.shape.size / 2.0
+					var corners = [
+						Vector2(-half_size.x, -half_size.y),
+						Vector2(half_size.x, -half_size.y),
+						Vector2(half_size.x, half_size.y),
+						Vector2(-half_size.x, half_size.y)
+					]
+					# Rotate corners and translate to position
+					for i in range(corners.size()):
+						corners[i] = corners[i].rotated(body_rotation) + local_pos
+					# Draw lines between corners
+					for i in range(4):
+						draw_line(corners[i], corners[(i + 1) % 4], color, 3.0)
 	
-	# Draw debug circles for static bodies (with different style)
+	# Draw debug shapes for static bodies (with different style)
 	for body in existing_static_bodies:
 		if not is_instance_valid(body):
 			continue
+		
+		var body_rotation = body.global_rotation
 		
 		for child in body.get_children():
 			if child is CollisionShape2D:
@@ -969,16 +1104,38 @@ func _draw() -> void:
 				var world_pos = body.to_global(child.position)
 				var local_pos = to_local(world_pos)
 				
-				# Get radius from shape
-				var radius = DRAW_SIZE / 2.0
-				if child.shape is CircleShape2D:
-					radius = child.shape.radius
-				
 				# Static bodies get a distinct color (green tint)
-				var density = get_collision_density(child)
 				var color = Color(0.2, 0.7, 0.3, 0.9)  # Green for static
 				
-				# Draw circle outline (dashed effect with smaller segments)
-				draw_arc(local_pos, radius, 0, TAU, 16, color, 3.0)
-				# Draw inner circle to distinguish from dynamic
-				draw_arc(local_pos, radius * 0.6, 0, TAU, 12, color, 2.0)
+				# Draw shape outline based on type
+				if child.shape is CircleShape2D:
+					var radius = child.shape.radius
+					draw_arc(local_pos, radius, 0, TAU, 16, color, 3.0)
+					# Draw inner circle to distinguish from dynamic
+					draw_arc(local_pos, radius * 0.6, 0, TAU, 12, color, 2.0)
+				elif child.shape is RectangleShape2D:
+					# Draw rotated rectangle as polygon
+					var half_size = child.shape.size / 2.0
+					var corners = [
+						Vector2(-half_size.x, -half_size.y),
+						Vector2(half_size.x, -half_size.y),
+						Vector2(half_size.x, half_size.y),
+						Vector2(-half_size.x, half_size.y)
+					]
+					# Rotate corners and translate to position
+					for i in range(corners.size()):
+						corners[i] = corners[i].rotated(body_rotation) + local_pos
+					# Draw lines between corners (outer)
+					for i in range(4):
+						draw_line(corners[i], corners[(i + 1) % 4], color, 3.0)
+					# Draw inner rect to distinguish from dynamic
+					var inner_corners = [
+						Vector2(-half_size.x * 0.6, -half_size.y * 0.6),
+						Vector2(half_size.x * 0.6, -half_size.y * 0.6),
+						Vector2(half_size.x * 0.6, half_size.y * 0.6),
+						Vector2(-half_size.x * 0.6, half_size.y * 0.6)
+					]
+					for i in range(inner_corners.size()):
+						inner_corners[i] = inner_corners[i].rotated(body_rotation) + local_pos
+					for i in range(4):
+						draw_line(inner_corners[i], inner_corners[(i + 1) % 4], color, 2.0)

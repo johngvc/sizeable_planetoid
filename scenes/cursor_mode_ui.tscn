@@ -100,6 +100,32 @@ theme_override_font_sizes/font_size = 13
 toggle_mode = true
 text = "🧱 Brick"
 
+[node name="Separator2" type="HSeparator" parent="ToolPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="BrushShapeLabel" type="Label" parent="ToolPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "🖌️ Brush Shape"
+horizontal_alignment = 1
+
+[node name="CircleBrushButton" type="Button" parent="ToolPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 36)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+toggle_mode = true
+button_pressed = true
+text = "⚫ Circle"
+
+[node name="SquareBrushButton" type="Button" parent="ToolPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 36)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+toggle_mode = true
+text = "⬛ Square"
+
 [node name="PauseButton" type="Button" parent="."]
 unique_name_in_owner = true
 offset_left = 170.0

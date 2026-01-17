@@ -12,6 +12,12 @@ var cursor_position: Vector2 = Vector2.ZERO
 var camera: Camera2D = null
 var use_mouse: bool = true  # Enable mouse control
 
+# Brush shape preview
+var current_brush_shape: String = "circle"
+var current_tool: String = "draw_dynamic"
+var brush_preview_size: float = 16.0  # Matches DRAW_SIZE in draw_manager
+var brush_preview_color: Color = Color(1.0, 1.0, 1.0, 0.3)
+
 
 func _ready() -> void:
 	visible = false
@@ -20,6 +26,25 @@ func _ready() -> void:
 	camera = get_tree().get_first_node_in_group("main_camera")
 	if camera == null:
 		camera = get_viewport().get_camera_2d()
+	
+	# Connect to cursor mode UI for brush shape and tool changes
+	var cursor_ui = get_tree().get_first_node_in_group("cursor_mode_ui")
+	if cursor_ui:
+		cursor_ui.brush_shape_changed.connect(_on_brush_shape_changed)
+		cursor_ui.tool_changed.connect(_on_tool_changed)
+		# Get initial values
+		current_brush_shape = cursor_ui.get_current_brush_shape()
+		current_tool = cursor_ui.get_current_tool()
+
+
+func _on_brush_shape_changed(shape: String) -> void:
+	current_brush_shape = shape
+	queue_redraw()
+
+
+func _on_tool_changed(tool_name: String) -> void:
+	current_tool = tool_name
+	queue_redraw()
 
 
 func _input(event: InputEvent) -> void:
@@ -103,6 +128,21 @@ func _draw() -> void:
 	draw_circle(Vector2.ZERO, cursor_radius, cursor_color)
 	# Draw outline for visibility
 	draw_arc(Vector2.ZERO, cursor_radius, 0, TAU, 32, Color.WHITE, 2.0)
+	
+	# Draw brush shape preview when in draw mode
+	if is_drawing_tool():
+		var half_size = brush_preview_size / 2.0
+		if current_brush_shape == "circle":
+			draw_circle(Vector2.ZERO, half_size, brush_preview_color)
+			draw_arc(Vector2.ZERO, half_size, 0, TAU, 32, Color(1.0, 1.0, 1.0, 0.5), 1.0)
+		elif current_brush_shape == "square":
+			var rect = Rect2(-half_size, -half_size, brush_preview_size, brush_preview_size)
+			draw_rect(rect, brush_preview_color)
+			draw_rect(rect, Color(1.0, 1.0, 1.0, 0.5), false, 1.0)
+
+
+func is_drawing_tool() -> bool:
+	return current_tool == "draw_dynamic" or current_tool == "draw_static"
 
 
 func is_cursor_active() -> bool:

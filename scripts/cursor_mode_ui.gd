@@ -4,6 +4,7 @@ extends CanvasLayer
 signal tool_changed(tool_name: String)
 signal material_changed(material: DrawMaterial)
 signal physics_paused(paused: bool)
+signal brush_shape_changed(shape: String)
 
 @onready var cursor_mode_button: Button = %CursorModeButton
 @onready var tool_panel: PanelContainer = %ToolPanel
@@ -16,10 +17,13 @@ signal physics_paused(paused: bool)
 @onready var brick_button: Button = %BrickButton
 @onready var pause_button: Button = %PauseButton
 @onready var pause_indicator: PanelContainer = %PauseIndicator
+@onready var circle_brush_button: Button = %CircleBrushButton
+@onready var square_brush_button: Button = %SquareBrushButton
 
 var current_tool: String = "draw_dynamic"
 var current_material: DrawMaterial = null
 var is_physics_paused: bool = false
+var current_brush_shape: String = "circle"
 
 # Material definitions
 var materials: Dictionary = {}
@@ -56,6 +60,10 @@ func _ready() -> void:
 	# Connect pause button
 	pause_button.pressed.connect(_on_pause_button_pressed)
 	
+	# Connect brush shape buttons
+	circle_brush_button.pressed.connect(_on_circle_brush_pressed)
+	square_brush_button.pressed.connect(_on_square_brush_pressed)
+	
 	# Find cursor and connect to mode changes
 	await get_tree().process_frame
 	var cursor = get_tree().get_first_node_in_group("cursor")
@@ -64,6 +72,9 @@ func _ready() -> void:
 	
 	# Emit initial material
 	material_changed.emit(current_material)
+	
+	# Emit initial brush shape
+	brush_shape_changed.emit(current_brush_shape)
 
 
 func _on_cursor_mode_button_pressed() -> void:
@@ -106,6 +117,28 @@ func _on_metal_pressed() -> void:
 
 func _on_brick_pressed() -> void:
 	set_material("brick")
+
+
+func _on_circle_brush_pressed() -> void:
+	set_brush_shape("circle")
+
+
+func _on_square_brush_pressed() -> void:
+	set_brush_shape("square")
+
+
+func set_brush_shape(shape: String) -> void:
+	current_brush_shape = shape
+	
+	# Update button states
+	circle_brush_button.button_pressed = (shape == "circle")
+	square_brush_button.button_pressed = (shape == "square")
+	
+	brush_shape_changed.emit(shape)
+
+
+func get_current_brush_shape() -> String:
+	return current_brush_shape
 
 
 func set_tool(tool_name: String) -> void:

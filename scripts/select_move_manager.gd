@@ -16,7 +16,7 @@ var original_angular_velocity: float = 0.0
 
 # Brush stroke selection
 var selected_stroke_index: int = -1  # Index into draw_manager.all_strokes
-var selected_preview_line: Line2D = null  # The Line2D being dragged
+var selected_preview_node: Node2D = null  # The preview node being dragged (Line2D or container)
 var drag_start_pos: Vector2 = Vector2.ZERO
 
 # Reference to draw manager
@@ -84,7 +84,7 @@ func _process(_delta: float) -> void:
 				# Try to select a brush stroke
 				var stroke_info = find_stroke_at_position(cursor_pos)
 				if stroke_info["index"] >= 0:
-					start_dragging_stroke(stroke_info["index"], stroke_info["line"], cursor_pos)
+					start_dragging_stroke(stroke_info["index"], stroke_info["node"], cursor_pos)
 		else:
 			# Continue dragging
 			if selected_body != null and is_instance_valid(selected_body):
@@ -119,30 +119,39 @@ func find_body_at_position(pos: Vector2) -> PhysicsBody2D:
 
 
 func find_stroke_at_position(pos: Vector2) -> Dictionary:
-	# Find a brush stroke (preview line) near this position
-	# Returns { "index": stroke_index, "line": Line2D } or { "index": -1, "line": null }
+	# Find a brush stroke (preview node) near this position
+	# Returns { "index": stroke_index, "node": Node2D } or { "index": -1, "node": null }
 	
 	if draw_manager == null:
-		return { "index": -1, "line": null }
+		return { "index": -1, "node": null }
 	
-	# Check finished strokes (preview_lines array corresponds to all_strokes)
-	if draw_manager.preview_lines.size() > 0 and draw_manager.all_strokes.size() > 0:
-		for i in range(draw_manager.preview_lines.size()):
-			var line = draw_manager.preview_lines[i]
-			if is_instance_valid(line) and is_point_near_line(pos, line):
-				return { "index": i, "line": line }
+	# Check finished strokes (preview_nodes array corresponds to all_strokes)
+	if draw_manager.preview_nodes.size() > 0 and draw_manager.all_strokes.size() > 0:
+		for i in range(draw_manager.preview_nodes.size()):
+			var node = draw_manager.preview_nodes[i]
+			if is_instance_valid(node) and is_point_near_preview_node(pos, node):
+				return { "index": i, "node": node }
 	
-	return { "index": -1, "line": null }
+	return { "index": -1, "node": null }
 
 
-func is_point_near_line(pos: Vector2, line: Line2D) -> bool:
-	# Check if pos is within SELECTION_RADIUS of any point on the line
-	for i in range(line.get_point_count()):
-		var line_point = line.get_point_position(i)
-		# Line2D points are in the line's local space, convert to global
-		var global_point = line.to_global(line_point)
-		if pos.distance_to(global_point) <= SELECTION_RADIUS:
-			return true
+func is_point_near_preview_node(pos: Vector2, node: Node2D) -> bool:
+	# Check if pos is within SELECTION_RADIUS of any point on the preview node
+	if node is Line2D:
+		var line = node as Line2D
+		for i in range(line.get_point_count()):
+			var line_point = line.get_point_position(i)
+			var global_point = line.to_global(line_point)
+			if pos.distance_to(global_point) <= SELECTION_RADIUS:
+				return true
+	else:
+		# It's a container with ColorRects
+		for child in node.get_children():
+			if child is ColorRect:
+				var center = child.position + child.size / 2.0
+				var global_point = node.to_global(center)
+				if pos.distance_to(global_point) <= SELECTION_RADIUS:
+					return true
 	return false
 
 
@@ -168,9 +177,9 @@ func start_dragging_body(body: PhysicsBody2D, cursor_pos: Vector2) -> void:
 	# StaticBody2D doesn't need any special handling - it's already static
 
 
-func start_dragging_stroke(stroke_index: int, line: Line2D, cursor_pos: Vector2) -> void:
+func start_dragging_stroke(stroke_index: int, node: Node2D, cursor_pos: Vector2) -> void:
 	selected_stroke_index = stroke_index
-	selected_preview_line = line
+	selected_preview_node = node
 	is_dragging = true
 	drag_start_pos = cursor_pos
 
@@ -188,7 +197,7 @@ func move_selected_stroke(cursor_pos: Vector2) -> void:
 		return
 	if selected_stroke_index >= draw_manager.all_strokes.size():
 		return
-	if selected_preview_line == null or not is_instance_valid(selected_preview_line):
+	if selected_preview_node == null or not is_instance_valid(selected_preview_node):
 		return
 	
 	# Calculate movement delta
@@ -201,10 +210,17 @@ func move_selected_stroke(cursor_pos: Vector2) -> void:
 	for i in range(points.size()):
 		points[i] += delta
 	
-	# Update the Line2D visual
-	for i in range(selected_preview_line.get_point_count()):
-		var old_pos = selected_preview_line.get_point_position(i)
-		selected_preview_line.set_point_position(i, old_pos + delta)
+	# Update the visual - handle both Line2D and ColorRect container
+	if selected_preview_node is Line2D:
+		var line = selected_preview_node as Line2D
+		for i in range(line.get_point_count()):
+			var old_pos = line.get_point_position(i)
+			line.set_point_position(i, old_pos + delta)
+	else:
+		# Container with ColorRects
+		for child in selected_preview_node.get_children():
+			if child is ColorRect:
+				child.position += delta
 
 
 func release_selection() -> void:
@@ -231,7 +247,7 @@ func release_selection() -> void:
 	selected_body = null
 	selected_is_static = false
 	selected_stroke_index = -1
-	selected_preview_line = null
+	selected_preview_node = null
 	is_dragging = false
 	queue_redraw()
 
@@ -252,13 +268,23 @@ func _draw() -> void:
 			draw_arc(local_pos, 22.0, 0, TAU, 32, ring_color, 1.0)
 	
 	# Draw selection highlight around selected stroke
-	if selected_preview_line != null and is_instance_valid(selected_preview_line):
+	if selected_preview_node != null and is_instance_valid(selected_preview_node):
 		# Draw highlight around the stroke's bounding area
-		for i in range(selected_preview_line.get_point_count()):
-			var point = selected_preview_line.get_point_position(i)
-			var global_point = selected_preview_line.to_global(point)
-			var local_point = to_local(global_point)
-			draw_circle(local_point, 10.0, highlight_color)
+		if selected_preview_node is Line2D:
+			var line = selected_preview_node as Line2D
+			for i in range(line.get_point_count()):
+				var point = line.get_point_position(i)
+				var global_point = line.to_global(point)
+				var local_point = to_local(global_point)
+				draw_circle(local_point, 10.0, highlight_color)
+		else:
+			# Container with ColorRects
+			for child in selected_preview_node.get_children():
+				if child is ColorRect:
+					var center = child.position + child.size / 2.0
+					var global_point = selected_preview_node.to_global(center)
+					var local_point = to_local(global_point)
+					draw_circle(local_point, 10.0, highlight_color)
 
 
 func is_mouse_over_gui() -> bool:
