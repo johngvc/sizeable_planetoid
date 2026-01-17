@@ -32,6 +32,9 @@ var is_draw_tool_active: bool = true
 
 
 func _ready() -> void:
+	# Add to group so other nodes can find us
+	add_to_group("draw_manager")
+	
 	# Load world-space UV shader
 	world_uv_shader = load("res://shaders/world_uv_line.gdshader")
 	
