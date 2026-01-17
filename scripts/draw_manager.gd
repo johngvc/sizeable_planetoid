@@ -7,15 +7,18 @@ const DRAW_SIZE: float = 16.0  # Size/width of the brush stroke
 const MIN_DRAW_DISTANCE: float = 4.0  # Distance between draw points for smooth brush
 const MERGE_DISTANCE: float = 24.0  # Distance threshold for merging strokes
 
-@export var wood_texture: Texture2D
-
 # Shader for world-space UV mapping
 var world_uv_shader: Shader = null
-var wood_material: ShaderMaterial = null
+
+# Current drawing material
+var current_draw_material: DrawMaterial = null
 
 # Strokes - each stroke is a separate continuous line
-var all_strokes: Array = []  # Array of Array[Vector2] - each inner array is one stroke
+# Each entry is a dictionary with "points" (Array[Vector2]) and "material" (DrawMaterial)
+var all_strokes: Array = []  # Array of { points: Array[Vector2], material: DrawMaterial, shader_material: ShaderMaterial }
 var current_stroke: Array[Vector2] = []  # The stroke currently being drawn
+var current_stroke_material: DrawMaterial = null  # Material for current stroke
+var current_stroke_shader: ShaderMaterial = null  # Shader material for current stroke
 var last_draw_position: Vector2 = Vector2.ZERO
 var preview_lines: Array[Line2D] = []  # One Line2D per stroke for preview
 var current_preview_line: Line2D = null  # Line2D for the current stroke being drawn
@@ -24,30 +27,77 @@ var is_currently_drawing: bool = false
 # Track all existing drawn physics bodies for merging
 var existing_drawn_bodies: Array[RigidBody2D] = []
 
+# Tool state - only draw when draw tool is active
+var is_draw_tool_active: bool = true
+
 
 func _ready() -> void:
-	# Load wood texture
-	wood_texture = load("res://assets/Textures/SBS - Tiny Texture Pack 2 - 256x256/256x256/Wood/Wood_01-256x256.png")
-	
-	# Load and setup world-space UV shader
+	# Load world-space UV shader
 	world_uv_shader = load("res://shaders/world_uv_line.gdshader")
-	wood_material = ShaderMaterial.new()
-	wood_material.shader = world_uv_shader
-	wood_material.set_shader_parameter("wood_texture", wood_texture)
-	wood_material.set_shader_parameter("texture_scale", 0.02)  # Adjust for texture size
-	wood_material.set_shader_parameter("tint_color", Color(1.0, 1.0, 1.0, 1.0))
 	
 	# Find cursor and connect to its signal
 	await get_tree().process_frame
 	var cursor = get_tree().get_first_node_in_group("cursor")
 	if cursor:
 		cursor.cursor_mode_changed.connect(_on_cursor_mode_changed)
+	
+	# Connect to tool UI
+	var cursor_ui = get_tree().get_first_node_in_group("cursor_mode_ui")
+	if cursor_ui:
+		cursor_ui.tool_changed.connect(_on_tool_changed)
+		cursor_ui.material_changed.connect(_on_material_changed)
+		# Get initial material
+		if cursor_ui.get_current_material() != null:
+			_on_material_changed(cursor_ui.get_current_material())
+
+
+func _on_material_changed(material: DrawMaterial) -> void:
+	current_draw_material = material
+
+
+func create_shader_material_for(material: DrawMaterial) -> ShaderMaterial:
+	# Create a NEW shader material instance for the given material
+	var shader_mat = ShaderMaterial.new()
+	shader_mat.shader = world_uv_shader
+	if material != null and material.texture != null:
+		shader_mat.set_shader_parameter("wood_texture", material.texture)
+	shader_mat.set_shader_parameter("texture_scale", 0.02)
+	if material != null:
+		shader_mat.set_shader_parameter("tint_color", material.tint)
+	else:
+		shader_mat.set_shader_parameter("tint_color", Color.WHITE)
+	return shader_mat
+
+
+func _on_tool_changed(tool_name: String) -> void:
+	is_draw_tool_active = (tool_name == "draw")
+	
+	# If switching away from draw tool mid-stroke, finish the stroke
+	if not is_draw_tool_active and is_currently_drawing:
+		if current_stroke.size() > 0:
+			all_strokes.append({
+				"points": current_stroke.duplicate(),
+				"material": current_stroke_material,
+				"shader_material": current_stroke_shader
+			})
+			if current_preview_line != null:
+				preview_lines.append(current_preview_line)
+				current_preview_line = null
+		current_stroke = []
+		current_stroke_material = null
+		current_stroke_shader = null
+		is_currently_drawing = false
 
 
 func _process(_delta: float) -> void:
 	var cursor = get_tree().get_first_node_in_group("cursor")
 	if cursor == null or not cursor.is_cursor_active():
 		# Clear any merge highlights when cursor is inactive
+		clear_merge_highlights()
+		return
+	
+	# Only process drawing when draw tool is active
+	if not is_draw_tool_active:
 		clear_merge_highlights()
 		return
 	
@@ -61,9 +111,11 @@ func _process(_delta: float) -> void:
 		var draw_pos = cursor.global_position
 		
 		if not is_currently_drawing:
-			# Starting a new stroke
+			# Starting a new stroke - capture current material
 			is_currently_drawing = true
 			current_stroke = []
+			current_stroke_material = current_draw_material
+			current_stroke_shader = create_shader_material_for(current_draw_material)
 			start_new_stroke_preview()
 			add_brush_point(draw_pos)
 			last_draw_position = draw_pos
@@ -79,14 +131,20 @@ func _process(_delta: float) -> void:
 				last_draw_position = draw_pos
 	else:
 		if is_currently_drawing:
-			# Finished this stroke - save it
+			# Finished this stroke - save it with its material
 			if current_stroke.size() > 0:
-				all_strokes.append(current_stroke.duplicate())
+				all_strokes.append({
+					"points": current_stroke.duplicate(),
+					"material": current_stroke_material,
+					"shader_material": current_stroke_shader
+				})
 				# Keep the preview line for this finished stroke
 				if current_preview_line != null:
 					preview_lines.append(current_preview_line)
 					current_preview_line = null
 			current_stroke = []
+			current_stroke_material = null
+			current_stroke_shader = null
 			is_currently_drawing = false
 
 
@@ -98,7 +156,8 @@ func start_new_stroke_preview() -> void:
 	current_preview_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
 	current_preview_line.end_cap_mode = Line2D.LINE_CAP_ROUND
 	current_preview_line.antialiased = true
-	current_preview_line.material = wood_material
+	# Use the stroke-specific shader material (cloned at stroke start)
+	current_preview_line.material = current_stroke_shader
 	get_parent().add_child(current_preview_line)
 
 
@@ -121,9 +180,15 @@ func _on_cursor_mode_changed(active: bool) -> void:
 	if not active:
 		# Finish current stroke if drawing
 		if is_currently_drawing and current_stroke.size() > 0:
-			all_strokes.append(current_stroke.duplicate())
+			all_strokes.append({
+				"points": current_stroke.duplicate(),
+				"material": current_stroke_material,
+				"shader_material": current_stroke_shader
+			})
 		is_currently_drawing = false
 		current_stroke = []
+		current_stroke_material = null
+		current_stroke_shader = null
 		
 		if all_strokes.size() > 0:
 			convert_strokes_to_physics()
@@ -148,9 +213,10 @@ func convert_strokes_to_physics() -> void:
 	
 	# STEP 1: Find which strokes connect to which existing bodies
 	var stroke_to_bodies: Array = []  # For each stroke index, array of connected bodies
-	for stroke in all_strokes:
+	for stroke_data in all_strokes:
+		var stroke_points = stroke_data["points"]
 		var connected_bodies: Array[RigidBody2D] = []
-		for point in stroke:
+		for point in stroke_points:
 			for body in existing_drawn_bodies:
 				if not is_instance_valid(body):
 					continue
@@ -185,7 +251,7 @@ func convert_strokes_to_physics() -> void:
 	# Unite strokes that are near each other (any point within MERGE_DISTANCE)
 	for i in range(stroke_count):
 		for j in range(i + 1, stroke_count):
-			if are_strokes_near(all_strokes[i], all_strokes[j]):
+			if are_strokes_near(all_strokes[i]["points"], all_strokes[j]["points"]):
 				unite_strokes.call(i, j)
 	
 	# Also unite strokes that share a common body connection
@@ -210,11 +276,11 @@ func convert_strokes_to_physics() -> void:
 	
 	for root in stroke_groups:
 		var stroke_indices: Array = stroke_groups[root]
-		var group_strokes: Array = []
+		var group_strokes: Array = []  # Now contains stroke_data dictionaries
 		var group_bodies: Array[RigidBody2D] = []
 		
 		for idx in stroke_indices:
-			group_strokes.append(all_strokes[idx])
+			group_strokes.append(all_strokes[idx])  # Pass the whole stroke_data dictionary
 			for body in stroke_to_bodies[idx]:
 				if body not in group_bodies:
 					group_bodies.append(body)
@@ -281,8 +347,8 @@ func convert_strokes_to_physics() -> void:
 		if bodies_in_group.size() == 0:
 			# New strokes that don't connect to existing bodies - create new bodies
 			var all_points: Array[Vector2] = []
-			for stroke in strokes_for_group:
-				for point in stroke:
+			for stroke_data in strokes_for_group:
+				for point in stroke_data["points"]:
 					all_points.append(point)
 			
 			var point_groups = group_points_by_proximity(all_points)
@@ -313,12 +379,16 @@ func combine_bodies_with_strokes(bodies: Array, strokes: Array) -> void:
 	
 	# Use the first body as the primary (keep it)
 	var primary_body: RigidBody2D = bodies[0]
+	var combined_mass = primary_body.mass
 	
 	# Collect all world-space data from other bodies
 	for i in range(1, bodies.size()):
 		var other_body: RigidBody2D = bodies[i]
 		if not is_instance_valid(other_body):
 			continue
+		
+		# Add mass from other body
+		combined_mass += other_body.mass
 		
 		# Transfer collision shapes (convert to world space, then to primary's local space)
 		for child in other_body.get_children():
@@ -329,9 +399,14 @@ func combine_bodies_with_strokes(bodies: Array, strokes: Array) -> void:
 				shape.radius = DRAW_SIZE / 2.0
 				collision.shape = shape
 				collision.position = primary_body.to_local(world_pos)
+				# Preserve material metadata from original collision
+				if child.has_meta("density"):
+					collision.set_meta("density", child.get_meta("density"))
+				if child.has_meta("material"):
+					collision.set_meta("material", child.get_meta("material"))
 				primary_body.add_child(collision)
 			elif child is Line2D:
-				# Transfer Line2D visuals
+				# Transfer Line2D visuals - preserve original material!
 				var visual_line = Line2D.new()
 				visual_line.width = child.width
 				visual_line.default_color = child.default_color
@@ -339,7 +414,7 @@ func combine_bodies_with_strokes(bodies: Array, strokes: Array) -> void:
 				visual_line.begin_cap_mode = child.begin_cap_mode
 				visual_line.end_cap_mode = child.end_cap_mode
 				visual_line.antialiased = child.antialiased
-				visual_line.material = wood_material
+				visual_line.material = child.material  # Preserve original material
 				
 				# Convert each point from other body's local to world to primary's local
 				for j in range(child.get_point_count()):
@@ -356,12 +431,13 @@ func combine_bodies_with_strokes(bodies: Array, strokes: Array) -> void:
 	# Now add the new strokes to the primary body
 	merge_strokes_into_body(strokes, primary_body)
 	
-	# Update mass
-	var collision_count = 0
+	# Recalculate combined mass from all collision shapes (accounts for overrides)
+	var recalculated_mass = 0.0
 	for child in primary_body.get_children():
 		if child is CollisionShape2D:
-			collision_count += 1
-	primary_body.mass = max(1.0, collision_count * 0.1)
+			var density = get_collision_density(child)
+			recalculated_mass += density * 0.1
+	primary_body.mass = max(0.1, recalculated_mass)
 
 
 func is_point_near_body(point: Vector2, body: RigidBody2D) -> bool:
@@ -375,25 +451,69 @@ func is_point_near_body(point: Vector2, body: RigidBody2D) -> bool:
 	return false
 
 
+func find_overlapping_collision(body: RigidBody2D, local_pos: Vector2) -> CollisionShape2D:
+	# Find an existing collision shape at or near the given local position
+	var overlap_threshold = DRAW_SIZE * 0.5  # Points within half the brush size overlap
+	for child in body.get_children():
+		if child is CollisionShape2D:
+			if child.position.distance_to(local_pos) < overlap_threshold:
+				return child
+	return null
+
+
+func get_collision_density(collision: CollisionShape2D) -> float:
+	# Get the density stored on a collision shape, default to 1.0
+	if collision.has_meta("density"):
+		return collision.get_meta("density")
+	return 1.0
+
+
 func merge_strokes_into_body(strokes: Array, body: RigidBody2D) -> void:
 	# Merge complete strokes into an existing body
+	# strokes is now an array of stroke_data dictionaries with "points", "material", "shader_material"
 	if strokes.is_empty() or not is_instance_valid(body):
 		return
 	
-	for stroke in strokes:
-		if stroke.is_empty():
+	var mass_delta = 0.0  # Track net mass change (can be negative if overriding lighter material)
+	
+	for stroke_data in strokes:
+		var stroke_points = stroke_data["points"]
+		var stroke_material = stroke_data["material"]
+		var stroke_shader = stroke_data["shader_material"]
+		
+		if stroke_points.is_empty():
 			continue
 		
-		# Add collision shapes for all points in the stroke
-		for point in stroke:
-			var collision = CollisionShape2D.new()
-			var shape = CircleShape2D.new()
-			shape.radius = DRAW_SIZE / 2.0
-			collision.shape = shape
-			collision.position = body.to_local(point)
-			body.add_child(collision)
+		var new_density = 1.0
+		if stroke_material != null:
+			new_density = stroke_material.density
 		
-		# Add a Line2D visual for this entire stroke
+		# Add collision shapes for all points in the stroke (with override check)
+		for point in stroke_points:
+			var local_pos = body.to_local(point)
+			var existing_collision = find_overlapping_collision(body, local_pos)
+			
+			if existing_collision != null:
+				# Override existing point's material
+				var old_density = get_collision_density(existing_collision)
+				existing_collision.set_meta("density", new_density)
+				existing_collision.set_meta("material", stroke_material)
+				# Adjust mass: subtract old contribution, add new
+				mass_delta += (new_density - old_density) * 0.1
+			else:
+				# Create new collision shape
+				var collision = CollisionShape2D.new()
+				var shape = CircleShape2D.new()
+				shape.radius = DRAW_SIZE / 2.0
+				collision.shape = shape
+				collision.position = local_pos
+				# Store material metadata on collision shape
+				collision.set_meta("density", new_density)
+				collision.set_meta("material", stroke_material)
+				body.add_child(collision)
+				mass_delta += new_density * 0.1
+		
+		# Add a Line2D visual for this entire stroke with its own material
 		var visual_line = Line2D.new()
 		visual_line.width = DRAW_SIZE
 		visual_line.default_color = Color(1.0, 1.0, 1.0, 1.0)
@@ -401,20 +521,16 @@ func merge_strokes_into_body(strokes: Array, body: RigidBody2D) -> void:
 		visual_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
 		visual_line.end_cap_mode = Line2D.LINE_CAP_ROUND
 		visual_line.antialiased = true
-		visual_line.material = wood_material
+		visual_line.material = stroke_shader  # Use stroke's own shader material
 		
 		# Add all points in stroke order, converted to body's local space
-		for point in stroke:
+		for point in stroke_points:
 			visual_line.add_point(body.to_local(point))
 		
 		body.add_child(visual_line)
 	
-	# Update mass based on total collision count
-	var collision_count = 0
-	for child in body.get_children():
-		if child is CollisionShape2D:
-			collision_count += 1
-	body.mass = max(1.0, collision_count * 0.1)
+	# Update mass with net change
+	body.mass = max(0.1, body.mass + mass_delta)
 
 
 func group_points_by_proximity(points: Array[Vector2]) -> Array:
@@ -465,13 +581,56 @@ func group_points_by_proximity(points: Array[Vector2]) -> Array:
 
 
 func create_physics_body_for_points(points: Array, strokes: Array) -> void:
+	# strokes is now an array of stroke_data dictionaries
 	if points.is_empty():
 		return
 	
 	# Create a single RigidBody2D
 	var physics_body = RigidBody2D.new()
 	physics_body.gravity_scale = 1.0
-	physics_body.mass = max(1.0, points.size() * 0.1)
+	
+	# Build a map of point -> stroke_data for material lookup
+	var point_to_stroke: Dictionary = {}
+	for stroke_data in strokes:
+		var stroke_points = stroke_data["points"]
+		for p in stroke_points:
+			if p in points:
+				# Later strokes override earlier ones (last wins)
+				point_to_stroke[p] = stroke_data
+	
+	# Calculate mass based on per-point material density
+	var total_mass = 0.0
+	for point in points:
+		var density = 1.0
+		if point_to_stroke.has(point) and point_to_stroke[point]["material"] != null:
+			density = point_to_stroke[point]["material"].density
+		total_mass += 0.1 * density
+	
+	physics_body.mass = max(1.0, total_mass)
+	
+	# Calculate weighted average friction and bounce based on material distribution
+	var total_friction = 0.0
+	var total_bounce = 0.0
+	var material_point_count = 0
+	for point in points:
+		var friction = 0.5
+		var bounce = 0.1
+		if point_to_stroke.has(point) and point_to_stroke[point]["material"] != null:
+			var mat = point_to_stroke[point]["material"]
+			friction = mat.friction
+			bounce = mat.bounce
+		total_friction += friction
+		total_bounce += bounce
+		material_point_count += 1
+	
+	var phys_mat = PhysicsMaterial.new()
+	if material_point_count > 0:
+		phys_mat.friction = total_friction / material_point_count
+		phys_mat.bounce = total_bounce / material_point_count
+	else:
+		phys_mat.friction = 0.5
+		phys_mat.bounce = 0.1
+	physics_body.physics_material_override = phys_mat
 	
 	# Calculate center of mass
 	var center = Vector2.ZERO
@@ -486,19 +645,31 @@ func create_physics_body_for_points(points: Array, strokes: Array) -> void:
 	for p in points:
 		points_set[p] = true
 	
-	# Create circle collision for each point
+	# Create circle collision for each point with material metadata
 	for point in points:
 		var collision = CollisionShape2D.new()
 		var shape = CircleShape2D.new()
 		shape.radius = DRAW_SIZE / 2.0
 		collision.shape = shape
 		collision.position = point - center
+		
+		# Store material metadata on collision shape
+		var density = 1.0
+		var mat = null
+		if point_to_stroke.has(point) and point_to_stroke[point]["material"] != null:
+			mat = point_to_stroke[point]["material"]
+			density = mat.density
+		collision.set_meta("density", density)
+		collision.set_meta("material", mat)
 		physics_body.add_child(collision)
 	
 	# Create separate Line2D for each stroke that has points in this group
-	for stroke in strokes:
+	for stroke_data in strokes:
+		var stroke_points = stroke_data["points"]
+		var stroke_shader = stroke_data["shader_material"]
+		
 		var stroke_points_in_group: Array[Vector2] = []
-		for point in stroke:
+		for point in stroke_points:
 			if points_set.has(point):
 				stroke_points_in_group.append(point)
 		
@@ -510,7 +681,7 @@ func create_physics_body_for_points(points: Array, strokes: Array) -> void:
 			visual_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
 			visual_line.end_cap_mode = Line2D.LINE_CAP_ROUND
 			visual_line.antialiased = true
-			visual_line.material = wood_material
+			visual_line.material = stroke_shader  # Use stroke's own shader material
 			
 			# Add points in stroke order
 			for point in stroke_points_in_group:
@@ -532,8 +703,8 @@ func update_merge_highlights() -> void:
 	var all_drawing_points: Array[Vector2] = []
 	for point in current_stroke:
 		all_drawing_points.append(point)
-	for stroke in all_strokes:
-		for point in stroke:
+	for stroke_data in all_strokes:
+		for point in stroke_data["points"]:
 			all_drawing_points.append(point)
 	
 	# Find bodies that could be merged with current drawing

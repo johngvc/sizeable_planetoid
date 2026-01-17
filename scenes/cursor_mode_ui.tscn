@@ -1,0 +1,93 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/cursor_mode_ui.gd" id="1_script"]
+
+[node name="CursorModeUI" type="CanvasLayer" groups=["cursor_mode_ui"]]
+layer = 10
+script = ExtResource("1_script")
+
+[node name="CursorModeButton" type="Button" parent="."]
+unique_name_in_owner = true
+offset_left = 10.0
+offset_top = 10.0
+offset_right = 160.0
+offset_bottom = 50.0
+theme_override_font_sizes/font_size = 16
+text = "🎨 Cursor Mode (C)"
+
+[node name="ToolPanel" type="PanelContainer" parent="."]
+unique_name_in_owner = true
+visible = false
+offset_left = 10.0
+offset_top = 60.0
+offset_right = 160.0
+offset_bottom = 380.0
+
+[node name="VBoxContainer" type="VBoxContainer" parent="ToolPanel"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="ToolsLabel" type="Label" parent="ToolPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "🔧 Tools"
+horizontal_alignment = 1
+
+[node name="DrawButton" type="Button" parent="ToolPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+toggle_mode = true
+button_pressed = true
+text = "✏️ Draw"
+
+[node name="SelectButton" type="Button" parent="ToolPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+toggle_mode = true
+text = "👆 Select"
+
+[node name="Separator" type="HSeparator" parent="ToolPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="MaterialLabel" type="Label" parent="ToolPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "🧱 Material"
+horizontal_alignment = 1
+
+[node name="WoodButton" type="Button" parent="ToolPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 36)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+toggle_mode = true
+button_pressed = true
+text = "🪵 Wood"
+
+[node name="StoneButton" type="Button" parent="ToolPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 36)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+toggle_mode = true
+text = "🪨 Stone"
+
+[node name="MetalButton" type="Button" parent="ToolPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 36)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+toggle_mode = true
+text = "⚙️ Metal"
+
+[node name="BrickButton" type="Button" parent="ToolPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 36)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+toggle_mode = true
+text = "🧱 Brick"
