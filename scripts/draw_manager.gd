@@ -14,21 +14,24 @@ var world_uv_shader: Shader = null
 var current_draw_material: DrawMaterial = null
 
 # Strokes - each stroke is a separate continuous line
-# Each entry is a dictionary with "points" (Array[Vector2]) and "material" (DrawMaterial)
-var all_strokes: Array = []  # Array of { points: Array[Vector2], material: DrawMaterial, shader_material: ShaderMaterial }
+# Each entry is a dictionary with "points" (Array[Vector2]), "material" (DrawMaterial), "is_static" (bool)
+var all_strokes: Array = []  # Array of { points: Array[Vector2], material: DrawMaterial, shader_material: ShaderMaterial, is_static: bool }
 var current_stroke: Array[Vector2] = []  # The stroke currently being drawn
 var current_stroke_material: DrawMaterial = null  # Material for current stroke
 var current_stroke_shader: ShaderMaterial = null  # Shader material for current stroke
+var current_stroke_is_static: bool = false  # Whether current stroke is static
 var last_draw_position: Vector2 = Vector2.ZERO
 var preview_lines: Array[Line2D] = []  # One Line2D per stroke for preview
 var current_preview_line: Line2D = null  # Line2D for the current stroke being drawn
 var is_currently_drawing: bool = false
 
 # Track all existing drawn physics bodies for merging
-var existing_drawn_bodies: Array[RigidBody2D] = []
+var existing_drawn_bodies: Array[RigidBody2D] = []  # Dynamic bodies
+var existing_static_bodies: Array[StaticBody2D] = []  # Static bodies
 
 # Tool state - only draw when draw tool is active
 var is_draw_tool_active: bool = true
+var is_draw_static_mode: bool = false  # false = dynamic (RigidBody2D), true = static (StaticBody2D)
 
 # Debug visualization
 var debug_draw_collisions: bool = true
@@ -76,7 +79,8 @@ func create_shader_material_for(material: DrawMaterial) -> ShaderMaterial:
 
 
 func _on_tool_changed(tool_name: String) -> void:
-	is_draw_tool_active = (tool_name == "draw")
+	is_draw_tool_active = (tool_name == "draw_dynamic" or tool_name == "draw_static")
+	is_draw_static_mode = (tool_name == "draw_static")
 	
 	# If switching away from draw tool mid-stroke, finish the stroke
 	if not is_draw_tool_active and is_currently_drawing:
@@ -84,7 +88,8 @@ func _on_tool_changed(tool_name: String) -> void:
 			all_strokes.append({
 				"points": current_stroke.duplicate(),
 				"material": current_stroke_material,
-				"shader_material": current_stroke_shader
+				"shader_material": current_stroke_shader,
+				"is_static": current_stroke_is_static
 			})
 			if current_preview_line != null:
 				preview_lines.append(current_preview_line)
@@ -92,6 +97,7 @@ func _on_tool_changed(tool_name: String) -> void:
 		current_stroke = []
 		current_stroke_material = null
 		current_stroke_shader = null
+		current_stroke_is_static = false
 		is_currently_drawing = false
 
 
@@ -126,11 +132,12 @@ func _process(_delta: float) -> void:
 		var draw_pos = cursor.global_position
 		
 		if not is_currently_drawing:
-			# Starting a new stroke - capture current material
+			# Starting a new stroke - capture current material and static mode
 			is_currently_drawing = true
 			current_stroke = []
 			current_stroke_material = current_draw_material
 			current_stroke_shader = create_shader_material_for(current_draw_material)
+			current_stroke_is_static = is_draw_static_mode
 			start_new_stroke_preview()
 			add_brush_point(draw_pos)
 			last_draw_position = draw_pos
@@ -146,12 +153,13 @@ func _process(_delta: float) -> void:
 				last_draw_position = draw_pos
 	else:
 		if is_currently_drawing:
-			# Finished this stroke - save it with its material
+			# Finished this stroke - save it with its material and static mode
 			if current_stroke.size() > 0:
 				all_strokes.append({
 					"points": current_stroke.duplicate(),
 					"material": current_stroke_material,
-					"shader_material": current_stroke_shader
+					"shader_material": current_stroke_shader,
+					"is_static": current_stroke_is_static
 				})
 				# Keep the preview line for this finished stroke
 				if current_preview_line != null:
@@ -160,6 +168,7 @@ func _process(_delta: float) -> void:
 			current_stroke = []
 			current_stroke_material = null
 			current_stroke_shader = null
+			current_stroke_is_static = false
 			is_currently_drawing = false
 	
 	# Update debug draw
@@ -202,12 +211,14 @@ func _on_cursor_mode_changed(active: bool) -> void:
 			all_strokes.append({
 				"points": current_stroke.duplicate(),
 				"material": current_stroke_material,
-				"shader_material": current_stroke_shader
+				"shader_material": current_stroke_shader,
+				"is_static": current_stroke_is_static
 			})
 		is_currently_drawing = false
 		current_stroke = []
 		current_stroke_material = null
 		current_stroke_shader = null
+		current_stroke_is_static = false
 		
 		if all_strokes.size() > 0:
 			convert_strokes_to_physics()
@@ -227,12 +238,87 @@ func convert_strokes_to_physics() -> void:
 	if all_strokes.is_empty():
 		return
 	
+	# Separate static and dynamic strokes
+	var static_strokes: Array = []
+	var dynamic_strokes: Array = []
+	for stroke_data in all_strokes:
+		if stroke_data.get("is_static", false):
+			static_strokes.append(stroke_data)
+		else:
+			dynamic_strokes.append(stroke_data)
+	
+	# Process static strokes - each becomes its own StaticBody2D (no merging)
+	for stroke_data in static_strokes:
+		create_static_body_for_stroke(stroke_data)
+	
+	# Process dynamic strokes with the existing merging logic
+	if dynamic_strokes.size() > 0:
+		convert_dynamic_strokes_to_physics(dynamic_strokes)
+	
+	all_strokes.clear()
+
+
+func create_static_body_for_stroke(stroke_data: Dictionary) -> void:
+	var stroke_points = stroke_data["points"]
+	var stroke_material = stroke_data["material"]
+	var stroke_shader = stroke_data["shader_material"]
+	
+	if stroke_points.is_empty():
+		return
+	
+	# Calculate center
+	var center = Vector2.ZERO
+	for point in stroke_points:
+		center += point
+	center /= stroke_points.size()
+	
+	# Create StaticBody2D
+	var static_body = StaticBody2D.new()
+	static_body.global_position = center
+	
+	# Create collision shapes for each point
+	for point in stroke_points:
+		var collision = CollisionShape2D.new()
+		var shape = CircleShape2D.new()
+		shape.radius = DRAW_SIZE / 2.0
+		collision.shape = shape
+		collision.position = point - center
+		
+		# Store material metadata
+		var density = 1.0
+		if stroke_material != null:
+			density = stroke_material.density
+		collision.set_meta("density", density)
+		collision.set_meta("material", stroke_material)
+		static_body.add_child(collision)
+	
+	# Create Line2D visual
+	var visual_line = Line2D.new()
+	visual_line.width = DRAW_SIZE
+	visual_line.default_color = Color(1.0, 1.0, 1.0, 1.0)
+	visual_line.joint_mode = Line2D.LINE_JOINT_ROUND
+	visual_line.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	visual_line.end_cap_mode = Line2D.LINE_CAP_ROUND
+	visual_line.antialiased = true
+	visual_line.material = stroke_shader
+	
+	for point in stroke_points:
+		visual_line.add_point(point - center)
+	
+	static_body.add_child(visual_line)
+	get_parent().add_child(static_body)
+	
+	# Track for debug draw
+	existing_static_bodies.append(static_body)
+
+
+func convert_dynamic_strokes_to_physics(dynamic_strokes: Array) -> void:
 	# Clean up any freed bodies from the tracking list
 	existing_drawn_bodies = existing_drawn_bodies.filter(func(body): return is_instance_valid(body))
 	
 	# STEP 1: Find which strokes connect to which existing bodies
 	var stroke_to_bodies: Array = []  # For each stroke index, array of connected bodies
-	for stroke_data in all_strokes:
+	for stroke_data in dynamic_strokes:
 		var stroke_points = stroke_data["points"]
 		var connected_bodies: Array[RigidBody2D] = []
 		for point in stroke_points:
@@ -244,7 +330,7 @@ func convert_strokes_to_physics() -> void:
 		stroke_to_bodies.append(connected_bodies)
 	
 	# STEP 2: Build stroke-to-stroke proximity (which strokes are near each other)
-	var stroke_count = all_strokes.size()
+	var stroke_count = dynamic_strokes.size()
 	var stroke_parent: Array[int] = []
 	stroke_parent.resize(stroke_count)
 	for i in range(stroke_count):
@@ -270,7 +356,7 @@ func convert_strokes_to_physics() -> void:
 	# Unite strokes that are near each other (any point within MERGE_DISTANCE)
 	for i in range(stroke_count):
 		for j in range(i + 1, stroke_count):
-			if are_strokes_near(all_strokes[i]["points"], all_strokes[j]["points"]):
+			if are_strokes_near(dynamic_strokes[i]["points"], dynamic_strokes[j]["points"]):
 				unite_strokes.call(i, j)
 	
 	# Also unite strokes that share a common body connection
@@ -299,7 +385,7 @@ func convert_strokes_to_physics() -> void:
 		var group_bodies: Array[RigidBody2D] = []
 		
 		for idx in stroke_indices:
-			group_strokes.append(all_strokes[idx])  # Pass the whole stroke_data dictionary
+			group_strokes.append(dynamic_strokes[idx])  # Pass the whole stroke_data dictionary
 			for body in stroke_to_bodies[idx]:
 				if body not in group_bodies:
 					group_bodies.append(body)
@@ -794,7 +880,10 @@ func _draw() -> void:
 	if not debug_draw_collisions:
 		return
 	
-	# Draw debug circles for all collision shapes on physics bodies
+	# Clean up static bodies list
+	existing_static_bodies = existing_static_bodies.filter(func(body): return is_instance_valid(body))
+	
+	# Draw debug circles for all collision shapes on dynamic bodies
 	for body in existing_drawn_bodies:
 		if not is_instance_valid(body):
 			continue
@@ -822,3 +911,28 @@ func _draw() -> void:
 				
 				# Draw circle outline
 				draw_arc(local_pos, radius, 0, TAU, 16, color, 3.0)
+	
+	# Draw debug circles for static bodies (with different style)
+	for body in existing_static_bodies:
+		if not is_instance_valid(body):
+			continue
+		
+		for child in body.get_children():
+			if child is CollisionShape2D:
+				# Get world position of collision shape
+				var world_pos = body.to_global(child.position)
+				var local_pos = to_local(world_pos)
+				
+				# Get radius from shape
+				var radius = DRAW_SIZE / 2.0
+				if child.shape is CircleShape2D:
+					radius = child.shape.radius
+				
+				# Static bodies get a distinct color (green tint)
+				var density = get_collision_density(child)
+				var color = Color(0.2, 0.7, 0.3, 0.9)  # Green for static
+				
+				# Draw circle outline (dashed effect with smaller segments)
+				draw_arc(local_pos, radius, 0, TAU, 16, color, 3.0)
+				# Draw inner circle to distinguish from dynamic
+				draw_arc(local_pos, radius * 0.6, 0, TAU, 12, color, 2.0)

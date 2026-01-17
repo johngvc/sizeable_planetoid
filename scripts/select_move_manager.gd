@@ -5,8 +5,9 @@ const SELECTION_RADIUS: float = 20.0
 
 var is_active: bool = false
 
-# Physics body selection
-var selected_body: RigidBody2D = null
+# Physics body selection (works for both RigidBody2D and StaticBody2D)
+var selected_body: PhysicsBody2D = null  # Can be RigidBody2D or StaticBody2D
+var selected_is_static: bool = false  # Track if selected body is static
 var is_dragging: bool = false
 var drag_offset: Vector2 = Vector2.ZERO
 var original_gravity_scale: float = 1.0
@@ -75,7 +76,7 @@ func _process(_delta: float) -> void:
 	
 	if is_clicking:
 		if not is_dragging:
-			# Try to select a body first
+			# Try to select a body first (RigidBody2D or StaticBody2D)
 			var body = find_body_at_position(cursor_pos)
 			if body != null:
 				start_dragging_body(body, cursor_pos)
@@ -97,8 +98,8 @@ func _process(_delta: float) -> void:
 	queue_redraw()
 
 
-func find_body_at_position(pos: Vector2) -> RigidBody2D:
-	# Find any RigidBody2D that has a collision shape near this position
+func find_body_at_position(pos: Vector2) -> PhysicsBody2D:
+	# Find any RigidBody2D or StaticBody2D that has a collision shape near this position
 	var space_state = get_world_2d().direct_space_state
 	
 	# Create a circle query
@@ -111,7 +112,7 @@ func find_body_at_position(pos: Vector2) -> RigidBody2D:
 	
 	for result in results:
 		var collider = result.collider
-		if collider is RigidBody2D:
+		if collider is RigidBody2D or collider is StaticBody2D:
 			return collider
 	
 	return null
@@ -145,21 +146,25 @@ func is_point_near_line(pos: Vector2, line: Line2D) -> bool:
 	return false
 
 
-func start_dragging_body(body: RigidBody2D, cursor_pos: Vector2) -> void:
+func start_dragging_body(body: PhysicsBody2D, cursor_pos: Vector2) -> void:
 	selected_body = body
 	is_dragging = true
 	drag_offset = body.global_position - cursor_pos
+	selected_is_static = body is StaticBody2D
 	
-	# Store original physics state
-	original_gravity_scale = body.gravity_scale
-	original_linear_velocity = body.linear_velocity
-	original_angular_velocity = body.angular_velocity
-	
-	# Disable gravity and freeze motion while dragging
-	body.gravity_scale = 0.0
-	body.linear_velocity = Vector2.ZERO
-	body.angular_velocity = 0.0
-	body.freeze = true
+	if body is RigidBody2D:
+		var rigid_body = body as RigidBody2D
+		# Store original physics state
+		original_gravity_scale = rigid_body.gravity_scale
+		original_linear_velocity = rigid_body.linear_velocity
+		original_angular_velocity = rigid_body.angular_velocity
+		
+		# Disable gravity and freeze motion while dragging
+		rigid_body.gravity_scale = 0.0
+		rigid_body.linear_velocity = Vector2.ZERO
+		rigid_body.angular_velocity = 0.0
+		rigid_body.freeze = true
+	# StaticBody2D doesn't need any special handling - it's already static
 
 
 func start_dragging_stroke(stroke_index: int, line: Line2D, cursor_pos: Vector2) -> void:
@@ -203,14 +208,18 @@ func move_selected_stroke(cursor_pos: Vector2) -> void:
 
 func release_selection() -> void:
 	if selected_body != null and is_instance_valid(selected_body):
-		# Restore physics
-		selected_body.freeze = false
-		selected_body.gravity_scale = original_gravity_scale
-		# Give it a gentle release (no velocity)
-		selected_body.linear_velocity = Vector2.ZERO
-		selected_body.angular_velocity = 0.0
+		if selected_body is RigidBody2D:
+			var rigid_body = selected_body as RigidBody2D
+			# Restore physics
+			rigid_body.freeze = false
+			rigid_body.gravity_scale = original_gravity_scale
+			# Give it a gentle release (no velocity)
+			rigid_body.linear_velocity = Vector2.ZERO
+			rigid_body.angular_velocity = 0.0
+		# StaticBody2D doesn't need any restoration
 	
 	selected_body = null
+	selected_is_static = false
 	selected_stroke_index = -1
 	selected_preview_line = null
 	is_dragging = false
@@ -225,8 +234,12 @@ func _draw() -> void:
 	if selected_body != null and is_instance_valid(selected_body):
 		# Draw a highlight circle at the body's center
 		var local_pos = to_local(selected_body.global_position)
+		var ring_color = Color.GREEN if not selected_is_static else Color(0.2, 0.8, 0.5)  # Teal for static
 		draw_circle(local_pos, 15.0, highlight_color)
-		draw_arc(local_pos, 18.0, 0, TAU, 32, Color.GREEN, 2.0)
+		draw_arc(local_pos, 18.0, 0, TAU, 32, ring_color, 2.0)
+		if selected_is_static:
+			# Extra ring for static bodies
+			draw_arc(local_pos, 22.0, 0, TAU, 32, ring_color, 1.0)
 	
 	# Draw selection highlight around selected stroke
 	if selected_preview_line != null and is_instance_valid(selected_preview_line):

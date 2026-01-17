@@ -6,14 +6,15 @@ signal material_changed(material: DrawMaterial)
 
 @onready var cursor_mode_button: Button = %CursorModeButton
 @onready var tool_panel: PanelContainer = %ToolPanel
-@onready var draw_button: Button = %DrawButton
+@onready var draw_dynamic_button: Button = %DrawDynamicButton
+@onready var draw_static_button: Button = %DrawStaticButton
 @onready var select_button: Button = %SelectButton
 @onready var wood_button: Button = %WoodButton
 @onready var stone_button: Button = %StoneButton
 @onready var metal_button: Button = %MetalButton
 @onready var brick_button: Button = %BrickButton
 
-var current_tool: String = "draw"
+var current_tool: String = "draw_dynamic"
 var current_material: DrawMaterial = null
 
 # Material definitions
@@ -35,7 +36,8 @@ func _ready() -> void:
 	current_material = materials["wood"]
 	
 	# Connect tool buttons
-	draw_button.pressed.connect(_on_draw_pressed)
+	draw_dynamic_button.pressed.connect(_on_draw_dynamic_pressed)
+	draw_static_button.pressed.connect(_on_draw_static_pressed)
 	select_button.pressed.connect(_on_select_pressed)
 	
 	# Connect material buttons
@@ -67,12 +69,16 @@ func _on_cursor_mode_changed(active: bool) -> void:
 	tool_panel.visible = active
 	cursor_mode_button.button_pressed = active
 	if active:
-		# Reset to draw tool when opening cursor mode
-		set_tool("draw")
+		# Reset to draw dynamic tool when opening cursor mode
+		set_tool("draw_dynamic")
 
 
-func _on_draw_pressed() -> void:
-	set_tool("draw")
+func _on_draw_dynamic_pressed() -> void:
+	set_tool("draw_dynamic")
+
+
+func _on_draw_static_pressed() -> void:
+	set_tool("draw_static")
 
 
 func _on_select_pressed() -> void:
@@ -99,7 +105,8 @@ func set_tool(tool_name: String) -> void:
 	current_tool = tool_name
 	
 	# Update button states
-	draw_button.button_pressed = (tool_name == "draw")
+	draw_dynamic_button.button_pressed = (tool_name == "draw_dynamic")
+	draw_static_button.button_pressed = (tool_name == "draw_static")
 	select_button.button_pressed = (tool_name == "select")
 	
 	tool_changed.emit(tool_name)
