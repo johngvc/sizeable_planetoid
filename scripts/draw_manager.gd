@@ -30,6 +30,9 @@ var existing_drawn_bodies: Array[RigidBody2D] = []
 # Tool state - only draw when draw tool is active
 var is_draw_tool_active: bool = true
 
+# Debug visualization
+var debug_draw_collisions: bool = true
+
 
 func _ready() -> void:
 	# Add to group so other nodes can find us
@@ -97,18 +100,27 @@ func _process(_delta: float) -> void:
 	if cursor == null or not cursor.is_cursor_active():
 		# Clear any merge highlights when cursor is inactive
 		clear_merge_highlights()
+		# Still update debug draw
+		if debug_draw_collisions:
+			queue_redraw()
 		return
 	
 	# Only process drawing when draw tool is active
 	if not is_draw_tool_active:
 		clear_merge_highlights()
+		# Still update debug draw
+		if debug_draw_collisions:
+			queue_redraw()
 		return
 	
 	# Update merge preview highlights
 	update_merge_highlights()
 	
+	# Check if mouse is over UI - don't draw if so
+	var is_mouse_over_ui = is_mouse_over_gui()
+	
 	# Check if B is pressed or mouse left button is pressed for drawing
-	var is_drawing = Input.is_key_pressed(KEY_B) or Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT)
+	var is_drawing = Input.is_key_pressed(KEY_B) or (Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and not is_mouse_over_ui)
 	
 	if is_drawing:
 		var draw_pos = cursor.global_position
@@ -149,6 +161,10 @@ func _process(_delta: float) -> void:
 			current_stroke_material = null
 			current_stroke_shader = null
 			is_currently_drawing = false
+	
+	# Update debug draw
+	if debug_draw_collisions:
+		queue_redraw()
 
 
 func start_new_stroke_preview() -> void:
@@ -738,3 +754,71 @@ func clear_merge_highlights() -> void:
 		for child in body.get_children():
 			if child is Line2D:
 				child.default_color = Color(1.0, 1.0, 1.0, 1.0)
+
+
+func _process_debug(_delta: float) -> void:
+	if debug_draw_collisions:
+		queue_redraw()
+
+
+func is_mouse_over_gui() -> bool:
+	# Check if the mouse is currently over any GUI control
+	var mouse_pos = get_viewport().get_mouse_position()
+	
+	# Get all Control nodes and check if mouse is over any of them
+	var controls = get_tree().get_nodes_in_group("cursor_mode_ui")
+	for node in controls:
+		if node is CanvasLayer:
+			for child in node.get_children():
+				if child is Control and child.visible:
+					if is_control_hovered(child, mouse_pos):
+						return true
+	
+	return false
+
+
+func is_control_hovered(control: Control, mouse_pos: Vector2) -> bool:
+	# Check if this control or any of its children are hovered
+	if control.get_global_rect().has_point(mouse_pos):
+		return true
+	
+	for child in control.get_children():
+		if child is Control and child.visible:
+			if is_control_hovered(child, mouse_pos):
+				return true
+	
+	return false
+
+
+func _draw() -> void:
+	if not debug_draw_collisions:
+		return
+	
+	# Draw debug circles for all collision shapes on physics bodies
+	for body in existing_drawn_bodies:
+		if not is_instance_valid(body):
+			continue
+		
+		for child in body.get_children():
+			if child is CollisionShape2D:
+				# Get world position of collision shape
+				var world_pos = body.to_global(child.position)
+				var local_pos = to_local(world_pos)
+				
+				# Get radius from shape
+				var radius = DRAW_SIZE / 2.0
+				if child.shape is CircleShape2D:
+					radius = child.shape.radius
+				
+				# Color based on material density
+				var density = get_collision_density(child)
+				var color = Color.CYAN
+				if density < 1.0:
+					color = Color(0.6, 0.4, 0.2, 0.9)  # Light brown for wood
+				elif density > 2.0:
+					color = Color(0.5, 0.5, 0.6, 0.9)  # Gray for metal
+				else:
+					color = Color(0.4, 0.4, 0.4, 0.9)  # Dark gray for stone/brick
+				
+				# Draw circle outline
+				draw_arc(local_pos, radius, 0, TAU, 16, color, 3.0)

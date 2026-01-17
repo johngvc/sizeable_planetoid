@@ -68,7 +68,10 @@ func _process(_delta: float) -> void:
 		return
 	
 	var cursor_pos = cursor.global_position
-	var is_clicking = Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) or Input.is_key_pressed(KEY_B)
+	
+	# Check if mouse is over UI - don't select if so
+	var is_mouse_over_ui = is_mouse_over_gui()
+	var is_clicking = Input.is_key_pressed(KEY_B) or (Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and not is_mouse_over_ui)
 	
 	if is_clicking:
 		if not is_dragging:
@@ -233,3 +236,32 @@ func _draw() -> void:
 			var global_point = selected_preview_line.to_global(point)
 			var local_point = to_local(global_point)
 			draw_circle(local_point, 10.0, highlight_color)
+
+
+func is_mouse_over_gui() -> bool:
+	# Check if the mouse is currently over any GUI control
+	var mouse_pos = get_viewport().get_mouse_position()
+	
+	# Get all Control nodes and check if mouse is over any of them
+	var controls = get_tree().get_nodes_in_group("cursor_mode_ui")
+	for node in controls:
+		if node is CanvasLayer:
+			for child in node.get_children():
+				if child is Control and child.visible:
+					if is_control_hovered(child, mouse_pos):
+						return true
+	
+	return false
+
+
+func is_control_hovered(control: Control, mouse_pos: Vector2) -> bool:
+	# Check if this control or any of its children are hovered
+	if control.get_global_rect().has_point(mouse_pos):
+		return true
+	
+	for child in control.get_children():
+		if child is Control and child.visible:
+			if is_control_hovered(child, mouse_pos):
+				return true
+	
+	return false
