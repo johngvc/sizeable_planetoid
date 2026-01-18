@@ -19,11 +19,19 @@ signal brush_shape_changed(shape: String)
 @onready var pause_indicator: PanelContainer = %PauseIndicator
 @onready var circle_brush_button: Button = %CircleBrushButton
 @onready var square_brush_button: Button = %SquareBrushButton
+@onready var transform_mode_label: Label = %TransformModeLabel
 
 var current_tool: String = "draw_dynamic"
 var current_material: DrawMaterial = null
 var is_physics_paused: bool = false
 var current_brush_shape: String = "circle"
+
+# Transform mode colors
+var transform_mode_colors: Dictionary = {
+	"Move": Color(0.2, 0.8, 0.2),  # Green
+	"Resize": Color(0.2, 0.6, 1.0),  # Blue
+	"Rotate": Color(1.0, 0.6, 0.2)  # Orange
+}
 
 # Material definitions
 var materials: Dictionary = {}
@@ -191,3 +199,15 @@ func toggle_physics_pause() -> void:
 
 func is_paused() -> bool:
 	return is_physics_paused
+
+
+func update_transform_mode_label(mode_name: String) -> void:
+	if transform_mode_label:
+		transform_mode_label.text = mode_name + " (Q to cycle)"
+		if transform_mode_colors.has(mode_name):
+			transform_mode_label.add_theme_color_override("font_color", transform_mode_colors[mode_name])
+
+
+func show_transform_mode_label(visible: bool) -> void:
+	if transform_mode_label:
+		transform_mode_label.visible = visible

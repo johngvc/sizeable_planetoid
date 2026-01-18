@@ -79,14 +79,17 @@ func _on_physics_paused(paused: bool) -> void:
 	existing_drawn_bodies = existing_drawn_bodies.filter(func(body): return is_instance_valid(body))
 	
 	if paused:
-		# Freeze all dynamic bodies - store their state
+		# Freeze all dynamic bodies - store their state including transform
 		frozen_bodies_state.clear()
 		for body in existing_drawn_bodies:
 			if is_instance_valid(body):
 				frozen_bodies_state[body] = {
 					"gravity_scale": body.gravity_scale,
 					"linear_velocity": body.linear_velocity,
-					"angular_velocity": body.angular_velocity
+					"angular_velocity": body.angular_velocity,
+					"scale": body.scale,
+					"rotation": body.rotation,
+					"position": body.global_position
 				}
 				body.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC
 				body.freeze = true
@@ -95,12 +98,22 @@ func _on_physics_paused(paused: bool) -> void:
 		for body in existing_drawn_bodies:
 			if is_instance_valid(body) and frozen_bodies_state.has(body):
 				var state = frozen_bodies_state[body]
+				# Store current transform (may have been modified while paused)
+				var current_scale = body.scale
+				var current_rotation = body.rotation
+				var current_position = body.global_position
+				
 				body.freeze = false
 				body.freeze_mode = RigidBody2D.FREEZE_MODE_KINEMATIC
 				body.gravity_scale = state["gravity_scale"]
 				# Restore velocities for continuity
 				body.linear_velocity = state["linear_velocity"]
 				body.angular_velocity = state["angular_velocity"]
+				
+				# Preserve the current transform (don't reset to original)
+				body.scale = current_scale
+				body.rotation = current_rotation
+				body.global_position = current_position
 			# Also unfreeze bodies that weren't in frozen state (created while paused)
 			elif is_instance_valid(body) and body.freeze:
 				body.freeze = false
@@ -142,7 +155,8 @@ func _on_tool_changed(tool_name: String) -> void:
 				"material": current_stroke_material,
 				"shader_material": current_stroke_shader,
 				"is_static": current_stroke_is_static,
-				"brush_shape": current_stroke_brush_shape
+				"brush_shape": current_stroke_brush_shape,
+				"brush_scale": 1.0
 			})
 			if current_preview_node != null:
 				preview_nodes.append(current_preview_node)
@@ -216,7 +230,8 @@ func _process(_delta: float) -> void:
 					"material": current_stroke_material,
 					"shader_material": current_stroke_shader,
 					"is_static": current_stroke_is_static,
-					"brush_shape": current_stroke_brush_shape
+					"brush_shape": current_stroke_brush_shape,
+					"brush_scale": 1.0  # Default scale, modified by select tool resize
 				})
 				# Keep the preview node for this finished stroke
 				if current_preview_node != null:
@@ -289,7 +304,8 @@ func _on_cursor_mode_changed(active: bool) -> void:
 				"material": current_stroke_material,
 				"shader_material": current_stroke_shader,
 				"is_static": current_stroke_is_static,
-				"brush_shape": current_stroke_brush_shape
+				"brush_shape": current_stroke_brush_shape,
+				"brush_scale": 1.0
 			})
 		is_currently_drawing = false
 		current_stroke = []
@@ -337,12 +353,13 @@ func convert_strokes_to_physics() -> void:
 	all_strokes.clear()
 
 
-func create_collision_shape_for_brush(brush_shape: String) -> Shape2D:
+func create_collision_shape_for_brush(brush_shape: String, brush_scale: float = 1.0) -> Shape2D:
 	## Creates the appropriate collision shape based on brush type
-	var half_size = DRAW_SIZE / 2.0
+	var scaled_size = DRAW_SIZE * brush_scale
+	var half_size = scaled_size / 2.0
 	if brush_shape == "square":
 		var rect_shape = RectangleShape2D.new()
-		rect_shape.size = Vector2(DRAW_SIZE, DRAW_SIZE)
+		rect_shape.size = Vector2(scaled_size, scaled_size)
 		return rect_shape
 	else:  # Default to circle
 		var circle_shape = CircleShape2D.new()
@@ -375,6 +392,8 @@ func create_static_body_for_stroke(stroke_data: Dictionary) -> void:
 	var stroke_material = stroke_data["material"]
 	var stroke_shader = stroke_data["shader_material"]
 	var brush_shape = stroke_data.get("brush_shape", "circle")
+	var brush_scale = stroke_data.get("brush_scale", 1.0)
+	var scaled_size = DRAW_SIZE * brush_scale
 	
 	if stroke_points.is_empty():
 		return
@@ -392,7 +411,7 @@ func create_static_body_for_stroke(stroke_data: Dictionary) -> void:
 	# Create collision shapes for each point
 	for point in stroke_points:
 		var collision = CollisionShape2D.new()
-		collision.shape = create_collision_shape_for_brush(brush_shape)
+		collision.shape = create_collision_shape_for_brush(brush_shape, brush_scale)
 		collision.position = point - center
 		
 		# Store material metadata
@@ -407,10 +426,10 @@ func create_static_body_for_stroke(stroke_data: Dictionary) -> void:
 	# Create visual based on brush shape
 	if brush_shape == "square":
 		# Create axis-aligned squares for each point (relative to center)
-		var half_size = DRAW_SIZE / 2.0
+		var half_size = scaled_size / 2.0
 		for point in stroke_points:
 			var square = ColorRect.new()
-			square.size = Vector2(DRAW_SIZE, DRAW_SIZE)
+			square.size = Vector2(scaled_size, scaled_size)
 			square.position = (point - center) - Vector2(half_size, half_size)
 			square.color = Color.WHITE
 			square.material = stroke_shader
@@ -418,7 +437,7 @@ func create_static_body_for_stroke(stroke_data: Dictionary) -> void:
 	else:
 		# Use Line2D for circle brush
 		var visual_line = Line2D.new()
-		visual_line.width = DRAW_SIZE
+		visual_line.width = scaled_size
 		visual_line.default_color = Color(1.0, 1.0, 1.0, 1.0)
 		configure_line2d_for_brush(visual_line, brush_shape)
 		visual_line.antialiased = true
@@ -623,15 +642,15 @@ func combine_bodies_with_strokes(bodies: Array, strokes: Array) -> void:
 			if child is CollisionShape2D:
 				var world_pos = other_body.to_global(child.position)
 				var collision = CollisionShape2D.new()
-				# Preserve the shape type from original
-				var brush_shape = child.get_meta("brush_shape") if child.has_meta("brush_shape") else "circle"
-				collision.shape = create_collision_shape_for_brush(brush_shape)
+				# Copy the shape directly to preserve size (including any resizing)
+				collision.shape = child.shape.duplicate()
 				collision.position = primary_body.to_local(world_pos)
 				# Preserve material metadata from original collision
 				if child.has_meta("density"):
 					collision.set_meta("density", child.get_meta("density"))
 				if child.has_meta("material"):
 					collision.set_meta("material", child.get_meta("material"))
+				var brush_shape = child.get_meta("brush_shape") if child.has_meta("brush_shape") else "circle"
 				collision.set_meta("brush_shape", brush_shape)
 				primary_body.add_child(collision)
 			elif child is Line2D:
@@ -720,6 +739,8 @@ func merge_strokes_into_body(strokes: Array, body: RigidBody2D) -> void:
 		var stroke_material = stroke_data["material"]
 		var stroke_shader = stroke_data["shader_material"]
 		var brush_shape = stroke_data.get("brush_shape", "circle")
+		var brush_scale = stroke_data.get("brush_scale", 1.0)
+		var scaled_size = DRAW_SIZE * brush_scale
 		
 		if stroke_points.is_empty():
 			continue
@@ -743,7 +764,7 @@ func merge_strokes_into_body(strokes: Array, body: RigidBody2D) -> void:
 			else:
 				# Create new collision shape
 				var collision = CollisionShape2D.new()
-				collision.shape = create_collision_shape_for_brush(brush_shape)
+				collision.shape = create_collision_shape_for_brush(brush_shape, brush_scale)
 				collision.position = local_pos
 				# Store material metadata on collision shape
 				collision.set_meta("density", new_density)
@@ -755,11 +776,11 @@ func merge_strokes_into_body(strokes: Array, body: RigidBody2D) -> void:
 		# Add visual based on brush shape
 		if brush_shape == "square":
 			# Create axis-aligned squares for each point
-			var half_size = DRAW_SIZE / 2.0
+			var half_size = scaled_size / 2.0
 			for point in stroke_points:
 				var local_pos = body.to_local(point)
 				var square = ColorRect.new()
-				square.size = Vector2(DRAW_SIZE, DRAW_SIZE)
+				square.size = Vector2(scaled_size, scaled_size)
 				square.position = local_pos - Vector2(half_size, half_size)
 				square.color = Color.WHITE
 				square.material = stroke_shader
@@ -767,7 +788,7 @@ func merge_strokes_into_body(strokes: Array, body: RigidBody2D) -> void:
 		else:
 			# Use Line2D for circle brush
 			var visual_line = Line2D.new()
-			visual_line.width = DRAW_SIZE
+			visual_line.width = scaled_size
 			visual_line.default_color = Color(1.0, 1.0, 1.0, 1.0)
 			configure_line2d_for_brush(visual_line, brush_shape)
 			visual_line.antialiased = true
@@ -899,11 +920,13 @@ func create_physics_body_for_points(points: Array, strokes: Array) -> void:
 	for point in points:
 		var collision = CollisionShape2D.new()
 		
-		# Get brush shape from the stroke this point belongs to
+		# Get brush shape and scale from the stroke this point belongs to
 		var brush_shape = "circle"
+		var brush_scale = 1.0
 		if point_to_stroke.has(point):
 			brush_shape = point_to_stroke[point].get("brush_shape", "circle")
-		collision.shape = create_collision_shape_for_brush(brush_shape)
+			brush_scale = point_to_stroke[point].get("brush_scale", 1.0)
+		collision.shape = create_collision_shape_for_brush(brush_shape, brush_scale)
 		collision.position = point - center
 		
 		# Store material metadata on collision shape
@@ -922,6 +945,8 @@ func create_physics_body_for_points(points: Array, strokes: Array) -> void:
 		var stroke_points = stroke_data["points"]
 		var stroke_shader = stroke_data["shader_material"]
 		var stroke_brush_shape = stroke_data.get("brush_shape", "circle")
+		var stroke_brush_scale = stroke_data.get("brush_scale", 1.0)
+		var scaled_size = DRAW_SIZE * stroke_brush_scale
 		
 		var stroke_points_in_group: Array[Vector2] = []
 		for point in stroke_points:
@@ -931,10 +956,10 @@ func create_physics_body_for_points(points: Array, strokes: Array) -> void:
 		if stroke_points_in_group.size() > 0:
 			if stroke_brush_shape == "square":
 				# Create axis-aligned squares for each point
-				var half_size = DRAW_SIZE / 2.0
+				var half_size = scaled_size / 2.0
 				for point in stroke_points_in_group:
 					var square = ColorRect.new()
-					square.size = Vector2(DRAW_SIZE, DRAW_SIZE)
+					square.size = Vector2(scaled_size, scaled_size)
 					square.position = (point - center) - Vector2(half_size, half_size)
 					square.color = Color.WHITE
 					square.material = stroke_shader
@@ -942,7 +967,7 @@ func create_physics_body_for_points(points: Array, strokes: Array) -> void:
 			else:
 				# Use Line2D for circle brush
 				var visual_line = Line2D.new()
-				visual_line.width = DRAW_SIZE
+				visual_line.width = scaled_size
 				visual_line.default_color = Color(1.0, 1.0, 1.0, 1.0)
 				configure_line2d_for_brush(visual_line, stroke_brush_shape)
 				visual_line.antialiased = true
