@@ -10,6 +10,7 @@ signal brush_shape_changed(shape: String)
 @onready var tool_panel: PanelContainer = %ToolPanel
 @onready var draw_dynamic_button: Button = %DrawDynamicButton
 @onready var draw_static_button: Button = %DrawStaticButton
+@onready var eraser_button: Button = %EraserButton
 @onready var select_button: Button = %SelectButton
 @onready var wood_button: Button = %WoodButton
 @onready var stone_button: Button = %StoneButton
@@ -54,6 +55,7 @@ func _ready() -> void:
 	# Connect tool buttons
 	draw_dynamic_button.pressed.connect(_on_draw_dynamic_pressed)
 	draw_static_button.pressed.connect(_on_draw_static_pressed)
+	eraser_button.pressed.connect(_on_eraser_pressed)
 	select_button.pressed.connect(_on_select_pressed)
 	
 	# Connect material buttons
@@ -107,6 +109,10 @@ func _on_draw_static_pressed() -> void:
 	set_tool("draw_static")
 
 
+func _on_eraser_pressed() -> void:
+	set_tool("eraser")
+
+
 func _on_select_pressed() -> void:
 	set_tool("select")
 
@@ -155,6 +161,7 @@ func set_tool(tool_name: String) -> void:
 	# Update button states
 	draw_dynamic_button.button_pressed = (tool_name == "draw_dynamic")
 	draw_static_button.button_pressed = (tool_name == "draw_static")
+	eraser_button.button_pressed = (tool_name == "eraser")
 	select_button.button_pressed = (tool_name == "select")
 	
 	tool_changed.emit(tool_name)

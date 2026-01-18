@@ -34,6 +34,11 @@ var existing_static_bodies: Array[StaticBody2D] = []  # Static bodies
 # Tool state - only draw when draw tool is active
 var is_draw_tool_active: bool = true
 var is_draw_static_mode: bool = false  # false = dynamic (RigidBody2D), true = static (StaticBody2D)
+var is_eraser_tool_active: bool = false  # true when eraser tool is selected
+
+# Eraser state
+var current_eraser_stroke: Array[Vector2] = []  # Current eraser stroke being drawn
+var is_currently_erasing: bool = false
 
 # Brush shape state
 var current_brush_shape: String = "circle"  # "circle" or "square"
@@ -146,6 +151,7 @@ func create_shader_material_for(material: DrawMaterial) -> ShaderMaterial:
 func _on_tool_changed(tool_name: String) -> void:
 	is_draw_tool_active = (tool_name == "draw_dynamic" or tool_name == "draw_static")
 	is_draw_static_mode = (tool_name == "draw_static")
+	is_eraser_tool_active = (tool_name == "eraser")
 	
 	# If switching away from draw tool mid-stroke, finish the stroke
 	if not is_draw_tool_active and is_currently_drawing:
@@ -180,6 +186,19 @@ func _process(_delta: float) -> void:
 			queue_redraw()
 		return
 	
+	# Check if mouse is over UI
+	var is_mouse_over_ui = is_mouse_over_gui()
+	
+	# Check if B is pressed or mouse left button is pressed
+	var is_action_pressed = Input.is_key_pressed(KEY_B) or (Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and not is_mouse_over_ui)
+	
+	# Handle eraser tool
+	if is_eraser_tool_active:
+		process_eraser(cursor, is_action_pressed)
+		if debug_draw_collisions:
+			queue_redraw()
+		return
+	
 	# Only process drawing when draw tool is active
 	if not is_draw_tool_active:
 		clear_merge_highlights()
@@ -191,13 +210,7 @@ func _process(_delta: float) -> void:
 	# Update merge preview highlights
 	update_merge_highlights()
 	
-	# Check if mouse is over UI - don't draw if so
-	var is_mouse_over_ui = is_mouse_over_gui()
-	
-	# Check if B is pressed or mouse left button is pressed for drawing
-	var is_drawing = Input.is_key_pressed(KEY_B) or (Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT) and not is_mouse_over_ui)
-	
-	if is_drawing:
+	if is_action_pressed:
 		var draw_pos = cursor.global_position
 		
 		if not is_currently_drawing:
@@ -248,6 +261,240 @@ func _process(_delta: float) -> void:
 	# Update debug draw
 	if debug_draw_collisions:
 		queue_redraw()
+
+
+func process_eraser(cursor: Node, is_action_pressed: bool) -> void:
+	"""Process eraser tool - removes intersecting parts of objects"""
+	var draw_pos = cursor.get_global_position()
+	
+	if is_action_pressed:
+		if not is_currently_erasing:
+			is_currently_erasing = true
+			current_eraser_stroke = []
+			last_draw_position = draw_pos
+		
+		# Add eraser points with interpolation
+		if current_eraser_stroke.is_empty():
+			current_eraser_stroke.append(draw_pos)
+			erase_at_point(draw_pos)
+		else:
+			var distance = last_draw_position.distance_to(draw_pos)
+			if distance >= MIN_DRAW_DISTANCE:
+				var steps = max(1, int(distance / MIN_DRAW_DISTANCE))
+				for i in range(1, steps + 1):
+					var t = float(i) / float(steps)
+					var interp_pos = last_draw_position.lerp(draw_pos, t)
+					current_eraser_stroke.append(interp_pos)
+					erase_at_point(interp_pos)
+				last_draw_position = draw_pos
+	else:
+		if is_currently_erasing:
+			is_currently_erasing = false
+			current_eraser_stroke = []
+
+
+func erase_at_point(erase_pos: Vector2) -> void:
+	"""Erase objects at a specific point"""
+	var erase_radius = DRAW_SIZE / 2.0
+	
+	# Erase from preview strokes
+	erase_from_preview_strokes(erase_pos, erase_radius)
+	
+	# Erase from physics bodies
+	erase_from_physics_bodies(erase_pos, erase_radius)
+
+
+func erase_from_preview_strokes(erase_pos: Vector2, erase_radius: float) -> void:
+	"""Remove points from preview strokes that intersect with eraser"""
+	var strokes_to_remove = []
+	var any_modified = false
+	
+	for stroke_idx in range(all_strokes.size()):
+		var stroke_data = all_strokes[stroke_idx]
+		var points: Array = stroke_data["points"]
+		var brush_scale: float = stroke_data.get("brush_scale", 1.0)
+		var scaled_size = DRAW_SIZE * brush_scale
+		var brush_radius = scaled_size / 2.0
+		
+		# Find points to keep (not within erase radius)
+		var points_to_keep = []
+		for point in points:
+			var distance = point.distance_to(erase_pos)
+			# Check if brush at this point intersects with eraser
+			if distance > (erase_radius + brush_radius):
+				points_to_keep.append(point)
+		
+		# Update or remove stroke
+		if points_to_keep.is_empty():
+			# Remove entire stroke
+			strokes_to_remove.append(stroke_idx)
+			any_modified = true
+		elif points_to_keep.size() < points.size():
+			# Update stroke with remaining points
+			stroke_data["points"] = points_to_keep
+			any_modified = true
+	
+	# Remove strokes marked for deletion (in reverse order to maintain indices)
+	for stroke_idx in range(strokes_to_remove.size() - 1, -1, -1):
+		all_strokes.remove_at(strokes_to_remove[stroke_idx])
+	
+	# Rebuild all preview visuals if anything changed
+	if any_modified:
+		rebuild_preview_visuals()
+
+
+func rebuild_preview_visuals() -> void:
+	"""Rebuild all preview visual nodes from scratch"""
+	# Remove all existing preview nodes
+	for node in preview_nodes:
+		if is_instance_valid(node):
+			node.queue_free()
+	preview_nodes.clear()
+	
+	# Recreate preview nodes for each stroke
+	for stroke_data in all_strokes:
+		var points: Array = stroke_data["points"]
+		if points.is_empty():
+			continue
+		
+		var brush_shape: String = stroke_data.get("brush_shape", "circle")
+		var shader_material: ShaderMaterial = stroke_data.get("shader_material")
+		var brush_scale: float = stroke_data.get("brush_scale", 1.0)
+		var scaled_size = DRAW_SIZE * brush_scale
+		
+		if brush_shape == "square":
+			# Create container for squares
+			var container = Node2D.new()
+			get_parent().add_child(container)
+			
+			var half_size = scaled_size / 2.0
+			for point in points:
+				var square = ColorRect.new()
+				square.size = Vector2(scaled_size, scaled_size)
+				square.position = point - Vector2(half_size, half_size)
+				square.color = Color.WHITE
+				square.material = shader_material
+				container.add_child(square)
+			
+			preview_nodes.append(container)
+		else:
+			# Create Line2D for circles
+			var line = Line2D.new()
+			line.width = scaled_size
+			line.default_color = Color(1.0, 1.0, 1.0, 1.0)
+			configure_line2d_for_brush(line, brush_shape)
+			line.antialiased = true
+			line.material = shader_material
+			
+			for point in points:
+				line.add_point(point)
+			
+			get_parent().add_child(line)
+			preview_nodes.append(line)
+
+
+func erase_from_physics_bodies(erase_pos: Vector2, erase_radius: float) -> void:
+	"""Remove collision shapes from physics bodies that intersect with eraser"""
+	var bodies_to_check = []
+	
+	# Get all physics bodies (both static and dynamic)
+	for child in get_parent().get_children():
+		if child is StaticBody2D or child is RigidBody2D:
+			bodies_to_check.append(child)
+	
+	for body in bodies_to_check:
+		var shapes_to_remove = []
+		var shape_positions_to_remove = []  # Track positions for visual updates
+		
+		# Check each collision shape in the body
+		for child in body.get_children():
+			if child is CollisionShape2D:
+				var shape = child.shape
+				var shape_pos = body.global_position + child.position
+				
+				# Check distance from shape center to erase point
+				var distance = shape_pos.distance_to(erase_pos)
+				
+				# Determine shape radius based on shape type
+				var shape_radius = 0.0
+				if shape is CircleShape2D:
+					shape_radius = shape.radius
+				elif shape is RectangleShape2D:
+					# Use half of diagonal for conservative check
+					var half_extents = shape.size / 2.0
+					shape_radius = half_extents.length()
+				
+				# If shapes intersect, mark for removal
+				if distance < (erase_radius + shape_radius):
+					shapes_to_remove.append(child)
+					shape_positions_to_remove.append(child.position)
+		
+		# Remove marked shapes and update visuals
+		if shapes_to_remove.size() > 0:
+			# Remove collision shapes
+			for shape_node in shapes_to_remove:
+				shape_node.queue_free()
+			
+			# Update visuals - remove corresponding visual elements
+			update_body_visuals_after_erase(body, shape_positions_to_remove, erase_pos, erase_radius)
+			
+			# Wait a frame for queue_free to process
+			await get_tree().process_frame
+			
+			# Count remaining collision shapes
+			var remaining_shapes = 0
+			for child in body.get_children():
+				if child is CollisionShape2D:
+					remaining_shapes += 1
+			
+			# If no shapes remain, remove the entire body
+			if remaining_shapes == 0:
+				body.queue_free()
+				# Remove from tracking arrays
+				if body in existing_drawn_bodies:
+					existing_drawn_bodies.erase(body)
+				if body in existing_static_bodies:
+					existing_static_bodies.erase(body)
+
+
+func update_body_visuals_after_erase(body: Node2D, _erased_positions: Array, erase_pos: Vector2, erase_radius: float) -> void:
+	"""Update or remove visual elements (Line2D/ColorRect) after erasing collision shapes"""
+	# Find visual children
+	for child in body.get_children():
+		if child is Line2D:
+			# Remove points from Line2D that are near erased positions
+			var line = child as Line2D
+			var points_to_keep = []
+			
+			for i in range(line.get_point_count()):
+				var point = line.get_point_position(i)
+				var world_point = body.global_position + point
+				var should_keep = true
+				
+				# Check if this point should be removed (near erase position)
+				if world_point.distance_to(erase_pos) < erase_radius + (line.width / 2.0):
+					should_keep = false
+				
+				if should_keep:
+					points_to_keep.append(point)
+			
+			# Update Line2D points
+			if points_to_keep.is_empty():
+				child.queue_free()
+			else:
+				line.clear_points()
+				for point in points_to_keep:
+					line.add_point(point)
+		
+		elif child is ColorRect:
+			# Check if this ColorRect is near any erased position
+			var rect = child as ColorRect
+			var rect_center = rect.position + rect.size / 2.0
+			var world_center = body.global_position + rect_center
+			
+			# If ColorRect center is within erase radius, remove it
+			if world_center.distance_to(erase_pos) < erase_radius + (rect.size.length() / 2.0):
+				child.queue_free()
 
 
 func start_new_stroke_preview() -> void:
