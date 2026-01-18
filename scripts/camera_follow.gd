@@ -5,6 +5,7 @@ extends Camera2D
 @export var follow_smoothness: float = 5.0
 @export var base_resolution: Vector2 = Vector2(1920, 1080)
 @export var base_zoom: float = 4.0
+@export var vertical_offset_ratio: float = 0.25  # 0.0 = center, 0.5 = bottom edge, -0.5 = top edge
 
 
 func _ready() -> void:
@@ -33,5 +34,14 @@ func update_zoom() -> void:
 
 func _process(delta: float) -> void:
 	if follow_target:
-		# Smoothly move camera to player position
-		global_position = global_position.lerp(follow_target.global_position, follow_smoothness * delta)
+		# Calculate the vertical offset in world units
+		# Negative offset moves camera up (player appears lower/toward bottom)
+		var viewport_size = get_viewport().get_visible_rect().size
+		var world_height = viewport_size.y / zoom.y
+		var vertical_offset = -world_height * vertical_offset_ratio
+		
+		# Target position with offset
+		var target_pos = follow_target.global_position + Vector2(0, vertical_offset)
+		
+		# Smoothly move camera to offset target position
+		global_position = global_position.lerp(target_pos, follow_smoothness * delta)
