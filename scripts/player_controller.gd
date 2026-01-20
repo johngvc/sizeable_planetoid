@@ -4,8 +4,11 @@ extends CharacterBody2D
 signal fly_mode_changed(active: bool)
 
 # Movement constants
-const SPEED = 300.0
-const FLY_SPEED = 400.0
+const SPEED = 200.0
+const FLY_SPEED = 250.0
+const ACCELERATION = 2000.0  # Pixels per second squared
+const FLY_ACCELERATION = 1800.0  # Pixels per second squared in fly mode
+const FRICTION = 2400.0  # Deceleration when no input
 const JUMP_VELOCITY = -400.0
 
 # Get the gravity from the project settings
@@ -98,10 +101,12 @@ func _handle_fly_mode(delta: float) -> void:
 		
 		if direction != Vector2.ZERO:
 			direction = direction.normalized()
-			velocity = direction * FLY_SPEED
+			# Smooth acceleration toward target speed
+			var target_velocity = direction * FLY_SPEED
+			velocity = velocity.move_toward(target_velocity, FLY_ACCELERATION * delta)
 		else:
-			# Apply friction when not moving
-			velocity = velocity.move_toward(Vector2.ZERO, FLY_SPEED * 2.0 * delta)
+			# Apply smooth friction when not moving
+			velocity = velocity.move_toward(Vector2.ZERO, FRICTION * delta)
 
 
 func _handle_platformer_mode(delta: float) -> void:
@@ -111,8 +116,8 @@ func _handle_platformer_mode(delta: float) -> void:
 
 	# Don't accept movement input if cursor mode is active
 	if cursor and cursor.has_method("is_cursor_active") and cursor.is_cursor_active():
-		# Still apply physics but no input
-		velocity.x = move_toward(velocity.x, 0, SPEED)
+		# Still apply physics but no input - smooth deceleration
+		velocity.x = move_toward(velocity.x, 0, FRICTION * delta)
 		return
 
 	# Handle jump
@@ -124,9 +129,9 @@ func _handle_platformer_mode(delta: float) -> void:
 	if direction == 0:
 		direction = Input.get_axis("move_left", "move_right")
 	
-	# Apply horizontal movement
+	# Apply smooth horizontal movement
 	if direction:
-		velocity.x = direction * SPEED
+		velocity.x = move_toward(velocity.x, direction * SPEED, ACCELERATION * delta)
 	else:
-		# Apply friction when not moving
-		velocity.x = move_toward(velocity.x, 0, SPEED)
+		# Apply smooth friction when not moving
+		velocity.x = move_toward(velocity.x, 0, FRICTION * delta)
