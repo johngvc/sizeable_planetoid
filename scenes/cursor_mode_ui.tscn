@@ -62,6 +62,13 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 14
 text = "🧹 Eraser"
 
+[node name="ToolboxButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "🧰 Toolbox"
+
 [node name="Separator" type="HSeparator" parent="ToolPanel/VBoxContainer"]
 layout_mode = 2
 
@@ -156,6 +163,42 @@ theme_override_font_sizes/font_size = 12
 toggle_mode = true
 button_pressed = true
 text = "👁 Show Other Layers"
+
+[node name="ToolboxPanel" type="PanelContainer" parent="."]
+unique_name_in_owner = true
+visible = false
+anchors_preset = 0
+offset_left = 190.0
+offset_top = 60.0
+offset_right = 370.0
+offset_bottom = 300.0
+
+[node name="VBoxContainer" type="VBoxContainer" parent="ToolboxPanel"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="ToolboxLabel" type="Label" parent="ToolboxPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "🧰 Toolbox"
+horizontal_alignment = 1
+
+[node name="BoltToolButton" type="CheckBox" parent="ToolboxPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+button_pressed = true
+text = "🔩 Bolt"
+
+[node name="Separator" type="HSeparator" parent="ToolboxPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="InstructionLabel" type="Label" parent="ToolboxPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
+text = "Click on overlapping Layer 1 and Layer 2 objects to place bolts. Bolts will connect the objects when you exit cursor mode."
+autowrap_mode = 3
 
 [node name="PauseButton" type="Button" parent="."]
 unique_name_in_owner = true

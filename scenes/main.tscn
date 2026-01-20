@@ -1,4 +1,4 @@
-[gd_scene load_steps=11 format=3 uid="uid://d5555555555a"]
+[gd_scene load_steps=10 format=3 uid="uid://d5555555555a"]
 
 [ext_resource type="PackedScene" uid="uid://c1234567890a" path="res://scenes/player.tscn" id="1_player_scene"]
 [ext_resource type="PackedScene" uid="uid://b9876543210a" path="res://scenes/ground.tscn" id="2_ground_scene"]
@@ -8,7 +8,6 @@
 [ext_resource type="PackedScene" uid="uid://cdrawmanager123" path="res://scenes/draw_manager.tscn" id="6_draw"]
 [ext_resource type="PackedScene" path="res://scenes/cursor_mode_ui.tscn" id="7_cursor_ui"]
 [ext_resource type="PackedScene" path="res://scenes/select_move_manager.tscn" id="8_select_move"]
-[ext_resource type="PackedScene" path="res://scenes/toolbox_ui.tscn" id="9_toolbox_ui"]
 [ext_resource type="Script" path="res://scripts/bolt_tool.gd" id="10_bolt_tool"]
 
 [node name="Main" type="Node2D"]
@@ -55,8 +54,6 @@ position = Vector2(0, 50)
 [node name="CursorModeUI" parent="." instance=ExtResource("7_cursor_ui")]
 
 [node name="SelectMoveManager" parent="." instance=ExtResource("8_select_move")]
-
-[node name="ToolboxUI" parent="." instance=ExtResource("9_toolbox_ui")]
 
 [node name="BoltTool" type="Node2D" parent="."]
 script = ExtResource("10_bolt_tool")

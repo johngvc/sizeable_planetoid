@@ -706,6 +706,11 @@ func convert_strokes_to_physics() -> void:
 		convert_dynamic_strokes_to_physics(dynamic_strokes)
 	
 	all_strokes.clear()
+	
+	# Notify bolt tool to convert preview bolts to joints
+	var bolt_tool = get_tree().get_first_node_in_group("bolt_tool")
+	if bolt_tool and bolt_tool.has_method("convert_preview_bolts_to_joints"):
+		bolt_tool.convert_preview_bolts_to_joints()
 
 
 func create_collision_shape_for_brush(brush_shape: String, brush_scale: float = 1.0) -> Shape2D:

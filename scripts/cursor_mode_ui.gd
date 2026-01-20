@@ -7,6 +7,7 @@ signal physics_paused(paused: bool)
 signal brush_shape_changed(shape: String)
 signal layer_changed(layer_number: int)
 signal show_other_layers_changed(show: bool)
+signal toolbox_tool_changed(toolbox_tool: String)
 
 @onready var cursor_mode_button: Button = %CursorModeButton
 @onready var tool_panel: PanelContainer = %ToolPanel
@@ -14,6 +15,7 @@ signal show_other_layers_changed(show: bool)
 @onready var draw_static_button: CheckBox = %DrawStaticButton
 @onready var eraser_button: CheckBox = %EraserButton
 @onready var select_button: CheckBox = %SelectButton
+@onready var toolbox_button: CheckBox = %ToolboxButton
 @onready var wood_button: CheckBox = %WoodButton
 @onready var stone_button: CheckBox = %StoneButton
 @onready var metal_button: CheckBox = %MetalButton
@@ -27,6 +29,8 @@ signal show_other_layers_changed(show: bool)
 @onready var show_other_layers_button: Button = %ShowOtherLayersButton
 @onready var transform_mode_label: Label = %TransformModeLabel
 @onready var current_layer_label: Label = %CurrentLayerLabel
+@onready var toolbox_panel: PanelContainer = %ToolboxPanel
+@onready var bolt_tool_button: CheckBox = %BoltToolButton
 
 var current_tool: String = "draw_dynamic"
 var current_material: DrawMaterial = null
@@ -34,6 +38,7 @@ var is_physics_paused: bool = false
 var current_brush_shape: String = "circle"
 var current_layer: int = 1
 var show_other_layers: bool = true
+var current_toolbox_tool: String = "bolt"
 
 # Transform mode colors
 var transform_mode_colors: Dictionary = {
@@ -53,6 +58,7 @@ func _ready() -> void:
 	draw_static_button.button_group = tool_button_group
 	eraser_button.button_group = tool_button_group
 	select_button.button_group = tool_button_group
+	toolbox_button.button_group = tool_button_group
 	
 	var material_button_group = ButtonGroup.new()
 	wood_button.button_group = material_button_group
@@ -68,6 +74,9 @@ func _ready() -> void:
 	layer1_button.button_group = layer_button_group
 	layer2_button.button_group = layer_button_group
 	
+	var toolbox_tool_button_group = ButtonGroup.new()
+	bolt_tool_button.button_group = toolbox_tool_button_group
+	
 	# Initialize materials
 	materials["wood"] = DrawMaterial.create_wood()
 	materials["stone"] = DrawMaterial.create_stone()
@@ -81,11 +90,16 @@ func _ready() -> void:
 	# Set default material
 	current_material = materials["wood"]
 	
+	# Hide toolbox panel initially
+	if toolbox_panel:
+		toolbox_panel.visible = false
+	
 	# Connect tool buttons
 	draw_dynamic_button.pressed.connect(_on_draw_dynamic_pressed)
 	draw_static_button.pressed.connect(_on_draw_static_pressed)
 	eraser_button.pressed.connect(_on_eraser_pressed)
 	select_button.pressed.connect(_on_select_pressed)
+	toolbox_button.pressed.connect(_on_toolbox_pressed)
 	
 	# Connect material buttons
 	wood_button.pressed.connect(_on_wood_pressed)
@@ -107,6 +121,9 @@ func _ready() -> void:
 	layer1_button.pressed.connect(_on_layer1_pressed)
 	layer2_button.pressed.connect(_on_layer2_pressed)
 	show_other_layers_button.pressed.connect(_on_show_other_layers_pressed)
+	
+	# Connect toolbox tool buttons
+	bolt_tool_button.pressed.connect(_on_bolt_tool_pressed)
 	
 	# Find cursor and connect to mode changes
 	await get_tree().process_frame
@@ -152,6 +169,14 @@ func _on_eraser_pressed() -> void:
 
 func _on_select_pressed() -> void:
 	set_tool("select")
+
+
+func _on_toolbox_pressed() -> void:
+	set_tool("toolbox")
+
+
+func _on_bolt_tool_pressed() -> void:
+	set_toolbox_tool("bolt")
 
 
 func _on_wood_pressed() -> void:
@@ -213,8 +238,18 @@ func set_tool(tool_name: String) -> void:
 	draw_static_button.button_pressed = (tool_name == "draw_static")
 	eraser_button.button_pressed = (tool_name == "eraser")
 	select_button.button_pressed = (tool_name == "select")
+	toolbox_button.button_pressed = (tool_name == "toolbox")
+	
+	# Show/hide toolbox panel based on tool
+	if toolbox_panel:
+		toolbox_panel.visible = (tool_name == "toolbox")
 	
 	tool_changed.emit(tool_name)
+
+
+func set_toolbox_tool(toolbox_tool: String) -> void:
+	current_toolbox_tool = toolbox_tool
+	toolbox_tool_changed.emit(toolbox_tool)
 
 
 func set_material(material_name: String) -> void:

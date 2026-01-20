@@ -46,30 +46,31 @@ func _on_brush_shape_changed(shape: String) -> void:
 
 func _on_tool_changed(tool_name: String) -> void:
 	current_tool = tool_name
+	
+	# Handle toolbox mode
+	var is_toolbox = (tool_name == "toolbox")
+	if is_toolbox != is_toolbox_mode:
+		is_toolbox_mode = is_toolbox
+		toolbox_mode_changed.emit(is_toolbox_mode)
+	
 	queue_redraw()
 
 
 func _input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and event.keycode == KEY_C:
 		toggle_cursor()
-	elif event is InputEventKey and event.pressed and event.keycode == KEY_T:
-		toggle_toolbox()
 	
-	# Track mouse movement when cursor or toolbox is active
-	if (is_active or is_toolbox_mode) and event is InputEventMouseMotion:
+	# Track mouse movement when cursor is active
+	if is_active and event is InputEventMouseMotion:
 		update_cursor_from_mouse()
 	
 	# Handle clicks in toolbox mode
-	if is_toolbox_mode and event is InputEventMouseButton:
+	if is_active and is_toolbox_mode and event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 			_on_toolbox_click()
 
 
 func toggle_cursor() -> void:
-	# Deactivate toolbox mode if active
-	if is_toolbox_mode:
-		toggle_toolbox()
-	
 	is_active = not is_active
 	visible = is_active
 	
@@ -82,30 +83,13 @@ func toggle_cursor() -> void:
 		else:
 			cursor_position = get_viewport().get_visible_rect().size / 2
 		global_position = cursor_position
+	else:
+		# When deactivating cursor, also deactivate toolbox mode
+		if is_toolbox_mode:
+			is_toolbox_mode = false
+			toolbox_mode_changed.emit(false)
 	
 	cursor_mode_changed.emit(is_active)
-
-
-func toggle_toolbox() -> void:
-	# Deactivate cursor mode if active
-	if is_active:
-		is_active = false
-		cursor_mode_changed.emit(false)
-	
-	is_toolbox_mode = not is_toolbox_mode
-	visible = is_toolbox_mode
-	
-	if is_toolbox_mode:
-		# Start cursor at mouse position
-		if use_mouse:
-			update_cursor_from_mouse()
-		elif camera:
-			cursor_position = camera.global_position
-		else:
-			cursor_position = get_viewport().get_visible_rect().size / 2
-		global_position = cursor_position
-	
-	toolbox_mode_changed.emit(is_toolbox_mode)
 
 
 func _on_toolbox_click() -> void:
