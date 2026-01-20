@@ -43,8 +43,15 @@ var is_currently_erasing: bool = false
 # Brush shape state
 var current_brush_shape: String = "circle"  # "circle" or "square"
 
+# Layer system
+var current_layer: int = 1  # Current active layer (1 = front, 2 = back)
+var show_other_layers: bool = true  # Whether to show other layers
+const LAYER_1_COLLISION_BIT: int = 0  # Collision layer bit for layer 1
+const LAYER_2_COLLISION_BIT: int = 1  # Collision layer bit for layer 2
+const GROUND_COLLISION_BIT: int = 2  # Collision layer bit for ground
+
 # Debug visualization
-var debug_draw_collisions: bool = true
+var debug_draw_collisions: bool = false
 
 # Physics pause state
 var is_physics_paused: bool = false
@@ -71,10 +78,13 @@ func _ready() -> void:
 		cursor_ui.material_changed.connect(_on_material_changed)
 		cursor_ui.physics_paused.connect(_on_physics_paused)
 		cursor_ui.brush_shape_changed.connect(_on_brush_shape_changed)
+		cursor_ui.layer_changed.connect(_on_layer_changed)
+		cursor_ui.show_other_layers_changed.connect(_on_show_other_layers_changed)
 		# Get initial values
 		if cursor_ui.get_current_material() != null:
 			_on_material_changed(cursor_ui.get_current_material())
 		current_brush_shape = cursor_ui.get_current_brush_shape()
+		current_layer = cursor_ui.get_current_layer()
 
 
 func _on_physics_paused(paused: bool) -> void:
@@ -134,17 +144,90 @@ func _on_brush_shape_changed(shape: String) -> void:
 	current_brush_shape = shape
 
 
-func create_shader_material_for(material: DrawMaterial) -> ShaderMaterial:
+func _on_layer_changed(layer_number: int) -> void:
+	current_layer = layer_number
+	update_layer_visibility()
+
+
+func _on_show_other_layers_changed(show_layers: bool) -> void:
+	show_other_layers = show_layers
+	update_layer_visibility()
+
+
+func update_layer_visibility() -> void:
+	"""Update visibility/transparency of all layers based on current settings"""
+	# Update preview strokes
+	for i in range(all_strokes.size()):
+		if i < preview_nodes.size():
+			var node = preview_nodes[i]
+			if is_instance_valid(node):
+				var stroke_layer = all_strokes[i].get("layer", 1)
+				apply_layer_modulation(node, stroke_layer)
+	
+	# Update physics bodies
+	for body in existing_drawn_bodies:
+		if is_instance_valid(body):
+			var body_layer = body.get_meta("layer", 1)
+			apply_layer_modulation(body, body_layer)
+	
+	for body in existing_static_bodies:
+		if is_instance_valid(body):
+			var body_layer = body.get_meta("layer", 1)
+			apply_layer_modulation(body, body_layer)
+
+
+func apply_layer_modulation(node: Node, layer: int) -> void:
+	"""Apply visual modulation based on layer and visibility settings"""
+	var base_modulate = Color.WHITE
+	
+	# Layer 2 (back) gets darker tint
+	if layer == 2:
+		base_modulate = Color(0.6, 0.6, 0.6, 1.0)
+	
+	# If not showing other layers, make non-active layers transparent
+	if not show_other_layers and layer != current_layer:
+		base_modulate.a = 0.25
+	
+	# Apply to the node itself
+	if node is CanvasItem:
+		node.modulate = base_modulate
+	
+	# Apply to Line2D and ColorRect children
+	for child in node.get_children():
+		if child is Line2D:
+			var line = child as Line2D
+			line.modulate = base_modulate
+			# If it has a shader material, update the tint parameter
+			if line.material is ShaderMaterial:
+				var shader_mat = line.material as ShaderMaterial
+				shader_mat.set_shader_parameter("tint_color", base_modulate)
+		elif child is ColorRect:
+			var rect = child as ColorRect
+			rect.modulate = base_modulate
+			# If it has a shader material, update the tint parameter
+			if rect.material is ShaderMaterial:
+				var shader_mat = rect.material as ShaderMaterial
+				shader_mat.set_shader_parameter("tint_color", base_modulate)
+
+
+func create_shader_material_for(material: DrawMaterial, layer: int = 1) -> ShaderMaterial:
 	# Create a NEW shader material instance for the given material
 	var shader_mat = ShaderMaterial.new()
 	shader_mat.shader = world_uv_shader
 	if material != null and material.texture != null:
 		shader_mat.set_shader_parameter("wood_texture", material.texture)
 	shader_mat.set_shader_parameter("texture_scale", 0.02)
+	
+	# Calculate tint based on material and layer
+	var base_tint = Color.WHITE
 	if material != null:
-		shader_mat.set_shader_parameter("tint_color", material.tint)
-	else:
-		shader_mat.set_shader_parameter("tint_color", Color.WHITE)
+		base_tint = material.tint
+	
+	# Apply layer tint (Layer 2 gets darker)
+	if layer == 2:
+		base_tint = base_tint * Color(0.6, 0.6, 0.6, 1.0)
+	
+	shader_mat.set_shader_parameter("tint_color", base_tint)
 	return shader_mat
 
 
@@ -162,7 +245,8 @@ func _on_tool_changed(tool_name: String) -> void:
 				"shader_material": current_stroke_shader,
 				"is_static": current_stroke_is_static,
 				"brush_shape": current_stroke_brush_shape,
-				"brush_scale": 1.0
+				"brush_scale": 1.0,
+				"layer": current_layer
 			})
 			if current_preview_node != null:
 				preview_nodes.append(current_preview_node)
@@ -218,7 +302,7 @@ func _process(_delta: float) -> void:
 			is_currently_drawing = true
 			current_stroke = []
 			current_stroke_material = current_draw_material
-			current_stroke_shader = create_shader_material_for(current_draw_material)
+			current_stroke_shader = create_shader_material_for(current_draw_material, current_layer)
 			current_stroke_is_static = is_draw_static_mode
 			current_stroke_brush_shape = current_brush_shape
 			start_new_stroke_preview()
@@ -244,7 +328,8 @@ func _process(_delta: float) -> void:
 					"shader_material": current_stroke_shader,
 					"is_static": current_stroke_is_static,
 					"brush_shape": current_stroke_brush_shape,
-					"brush_scale": 1.0  # Default scale, modified by select tool resize
+					"brush_scale": 1.0,  # Default scale, modified by select tool resize
+					"layer": current_layer
 				})
 				# Keep the preview node for this finished stroke
 				if current_preview_node != null:
@@ -311,6 +396,12 @@ func erase_from_preview_strokes(erase_pos: Vector2, erase_radius: float) -> void
 	
 	for stroke_idx in range(all_strokes.size()):
 		var stroke_data = all_strokes[stroke_idx]
+		var stroke_layer = stroke_data.get("layer", 1)
+		
+		# Only erase strokes on the current layer
+		if stroke_layer != current_layer:
+			continue
+		
 		var points: Array = stroke_data["points"]
 		var brush_scale: float = stroke_data.get("brush_scale", 1.0)
 		var scaled_size = DRAW_SIZE * brush_scale
@@ -361,11 +452,15 @@ func rebuild_preview_visuals() -> void:
 		var shader_material: ShaderMaterial = stroke_data.get("shader_material")
 		var brush_scale: float = stroke_data.get("brush_scale", 1.0)
 		var scaled_size = DRAW_SIZE * brush_scale
+		var stroke_layer: int = stroke_data.get("layer", 1)
 		
 		if brush_shape == "square":
 			# Create container for squares
 			var container = Node2D.new()
 			get_parent().add_child(container)
+			# Set z_index based on layer (Layer 1 = front, Layer 2 = back)
+			container.z_index = 10 if stroke_layer == 1 else 5
+			apply_layer_modulation(container, stroke_layer)
 			
 			var half_size = scaled_size / 2.0
 			for point in points:
@@ -385,6 +480,9 @@ func rebuild_preview_visuals() -> void:
 			configure_line2d_for_brush(line, brush_shape)
 			line.antialiased = true
 			line.material = shader_material
+			# Set z_index based on layer (Layer 1 = front, Layer 2 = back)
+			line.z_index = 10 if stroke_layer == 1 else 5
+			apply_layer_modulation(line, stroke_layer)
 			
 			for point in points:
 				line.add_point(point)
@@ -397,10 +495,13 @@ func erase_from_physics_bodies(erase_pos: Vector2, erase_radius: float) -> void:
 	"""Remove collision shapes from physics bodies that intersect with eraser"""
 	var bodies_to_check = []
 	
-	# Get all physics bodies (both static and dynamic)
+	# Get all physics bodies (both static and dynamic) on the current layer
 	for child in get_parent().get_children():
 		if child is StaticBody2D or child is RigidBody2D:
-			bodies_to_check.append(child)
+			# Only erase bodies on the current layer
+			var body_layer = child.get_meta("layer", 1)
+			if body_layer == current_layer:
+				bodies_to_check.append(child)
 	
 	for body in bodies_to_check:
 		var shapes_to_remove = []
@@ -502,6 +603,9 @@ func start_new_stroke_preview() -> void:
 		# For squares, create a container node that will hold ColorRects
 		current_preview_node = Node2D.new()
 		get_parent().add_child(current_preview_node)
+		apply_layer_modulation(current_preview_node, current_layer)
+		# Set z_index based on layer (Layer 1 = front, Layer 2 = back)
+		current_preview_node.z_index = 10 if current_layer == 1 else 5
 		current_preview_line = null
 	else:
 		# For circles, use Line2D
@@ -512,6 +616,9 @@ func start_new_stroke_preview() -> void:
 		current_preview_line.antialiased = true
 		current_preview_line.material = current_stroke_shader
 		get_parent().add_child(current_preview_line)
+		apply_layer_modulation(current_preview_line, current_layer)
+		# Set z_index based on layer (Layer 1 = front, Layer 2 = back)
+		current_preview_line.z_index = 10 if current_layer == 1 else 5
 		current_preview_node = current_preview_line
 
 
@@ -552,7 +659,8 @@ func _on_cursor_mode_changed(active: bool) -> void:
 				"shader_material": current_stroke_shader,
 				"is_static": current_stroke_is_static,
 				"brush_shape": current_stroke_brush_shape,
-				"brush_scale": 1.0
+				"brush_scale": 1.0,
+				"layer": current_layer
 			})
 		is_currently_drawing = false
 		current_stroke = []
@@ -655,6 +763,22 @@ func create_static_body_for_stroke(stroke_data: Dictionary) -> void:
 	var static_body = StaticBody2D.new()
 	static_body.global_position = center
 	
+	# Get layer from stroke data
+	var body_layer = stroke_data.get("layer", 1)
+	
+	# Set collision layers
+	if body_layer == 1:
+		static_body.collision_layer = 1 << LAYER_1_COLLISION_BIT  # Bit 0 = value 1
+		static_body.collision_mask = (1 << LAYER_1_COLLISION_BIT) | (1 << GROUND_COLLISION_BIT)  # Bits 0,2 = value 5
+	else:  # layer 2
+		static_body.collision_layer = 1 << LAYER_2_COLLISION_BIT  # Bit 1 = value 2
+		static_body.collision_mask = (1 << LAYER_2_COLLISION_BIT) | (1 << GROUND_COLLISION_BIT)  # Bits 1,2 = value 6
+	
+	print("Created static body on layer ", body_layer, " - collision_layer: ", static_body.collision_layer, " collision_mask: ", static_body.collision_mask)
+	
+	# Store layer metadata
+	static_body.set_meta("layer", body_layer)
+	
 	# Create collision shapes for each point
 	for point in stroke_points:
 		var collision = CollisionShape2D.new()
@@ -697,6 +821,12 @@ func create_static_body_for_stroke(stroke_data: Dictionary) -> void:
 	
 	get_parent().add_child(static_body)
 	
+	# Set z_index based on layer (Layer 1 = front, Layer 2 = back)
+	static_body.z_index = 10 if body_layer == 1 else 5
+	
+	# Apply layer visual modulation
+	apply_layer_modulation(static_body, body_layer)
+	
 	# Track for debug draw
 	existing_static_bodies.append(static_body)
 
@@ -705,14 +835,19 @@ func convert_dynamic_strokes_to_physics(dynamic_strokes: Array) -> void:
 	# Clean up any freed bodies from the tracking list
 	existing_drawn_bodies = existing_drawn_bodies.filter(func(body): return is_instance_valid(body))
 	
-	# STEP 1: Find which strokes connect to which existing bodies
+	# STEP 1: Find which strokes connect to which existing bodies (only same layer)
 	var stroke_to_bodies: Array = []  # For each stroke index, array of connected bodies
 	for stroke_data in dynamic_strokes:
 		var stroke_points = stroke_data["points"]
+		var stroke_layer = stroke_data.get("layer", 1)
 		var connected_bodies: Array[RigidBody2D] = []
 		for point in stroke_points:
 			for body in existing_drawn_bodies:
 				if not is_instance_valid(body):
+					continue
+				# Only connect bodies on the same layer
+				var body_layer = body.get_meta("layer", 1)
+				if body_layer != stroke_layer:
 					continue
 				if body not in connected_bodies and is_point_near_body(point, body):
 					connected_bodies.append(body)
@@ -742,15 +877,25 @@ func convert_dynamic_strokes_to_physics(dynamic_strokes: Array) -> void:
 		if ra != rb:
 			stroke_parent[ra] = rb
 	
-	# Unite strokes that are near each other (any point within MERGE_DISTANCE)
+	# Unite strokes that are near each other (any point within MERGE_DISTANCE) and on same layer
 	for i in range(stroke_count):
 		for j in range(i + 1, stroke_count):
+			# Only merge strokes on the same layer
+			var layer_i = dynamic_strokes[i].get("layer", 1)
+			var layer_j = dynamic_strokes[j].get("layer", 1)
+			if layer_i != layer_j:
+				continue
 			if are_strokes_near(dynamic_strokes[i]["points"], dynamic_strokes[j]["points"]):
 				unite_strokes.call(i, j)
 	
 	# Also unite strokes that share a common body connection
 	for i in range(stroke_count):
 		for j in range(i + 1, stroke_count):
+			# Only merge strokes on the same layer
+			var layer_i = dynamic_strokes[i].get("layer", 1)
+			var layer_j = dynamic_strokes[j].get("layer", 1)
+			if layer_i != layer_j:
+				continue
 			# Check if they share any common body
 			for body in stroke_to_bodies[i]:
 				if body in stroke_to_bodies[j]:
@@ -815,6 +960,12 @@ func convert_dynamic_strokes_to_physics(dynamic_strokes: Array) -> void:
 			
 			for i in range(1, bodies_in_fg.size()):
 				var other_body = bodies_in_fg[i]
+				# Ensure bodies are on the same layer before merging
+				var primary_layer = bodies_in_fg[0].get_meta("layer", 1)
+				var other_layer = other_body.get_meta("layer", 1)
+				if primary_layer != other_layer:
+					continue
+				
 				var other_group = body_to_group[other_body]
 				
 				if other_group != target_group:
@@ -840,15 +991,26 @@ func convert_dynamic_strokes_to_physics(dynamic_strokes: Array) -> void:
 		
 		if bodies_in_group.size() == 0:
 			# New strokes that don't connect to existing bodies - create new bodies
-			var all_points: Array[Vector2] = []
+			# Group strokes by layer first to prevent cross-layer merging
+			var strokes_by_layer: Dictionary = {}  # layer -> Array of stroke_data
 			for stroke_data in strokes_for_group:
-				for point in stroke_data["points"]:
-					all_points.append(point)
+				var stroke_layer = stroke_data.get("layer", 1)
+				if not strokes_by_layer.has(stroke_layer):
+					strokes_by_layer[stroke_layer] = []
+				strokes_by_layer[stroke_layer].append(stroke_data)
 			
-			var point_groups = group_points_by_proximity(all_points)
-			for pg in point_groups:
-				if pg.size() > 0:
-					create_physics_body_for_points(pg, strokes_for_group)
+			# Process each layer separately
+			for layer in strokes_by_layer:
+				var layer_strokes = strokes_by_layer[layer]
+				var all_points: Array[Vector2] = []
+				for stroke_data in layer_strokes:
+					for point in stroke_data["points"]:
+						all_points.append(point)
+				
+				var point_groups = group_points_by_proximity(all_points)
+				for pg in point_groups:
+					if pg.size() > 0:
+						create_physics_body_for_points(pg, layer_strokes)
 		elif bodies_in_group.size() == 1:
 			merge_strokes_into_body(strokes_for_group, bodies_in_group[0])
 		else:
@@ -870,6 +1032,14 @@ func combine_bodies_with_strokes(bodies: Array, strokes: Array) -> void:
 	# Combine multiple RigidBody2D into one, including new strokes
 	if bodies.is_empty():
 		return
+	
+	# Verify all bodies are on the same layer - if not, don't merge
+	var primary_layer = bodies[0].get_meta("layer", 1)
+	for body in bodies:
+		var body_layer = body.get_meta("layer", 1)
+		if body_layer != primary_layer:
+			print("Warning: Attempted to merge bodies from different layers. Aborting merge.")
+			return
 	
 	# Use the first body as the primary (keep it)
 	var primary_body: RigidBody2D = bodies[0]
@@ -943,6 +1113,10 @@ func combine_bodies_with_strokes(bodies: Array, strokes: Array) -> void:
 			var density = get_collision_density(child)
 			recalculated_mass += density * 0.1
 	primary_body.mass = max(0.1, recalculated_mass)
+	
+	# Reapply layer modulation to the combined body
+	var body_layer = primary_body.get_meta("layer", 1)
+	apply_layer_modulation(primary_body, body_layer)
 
 
 func is_point_near_body(point: Vector2, body: RigidBody2D) -> bool:
@@ -1049,6 +1223,10 @@ func merge_strokes_into_body(strokes: Array, body: RigidBody2D) -> void:
 	
 	# Update mass with net change
 	body.mass = max(0.1, body.mass + mass_delta)
+	
+	# Reapply layer modulation to the body after adding new visuals
+	var body_layer = body.get_meta("layer", 1)
+	apply_layer_modulation(body, body_layer)
 
 
 func group_points_by_proximity(points: Array[Vector2]) -> Array:
@@ -1103,9 +1281,29 @@ func create_physics_body_for_points(points: Array, strokes: Array) -> void:
 	if points.is_empty():
 		return
 	
+	# Determine which layer this body belongs to (use first stroke's layer)
+	var body_layer = 1
+	if strokes.size() > 0:
+		body_layer = strokes[0].get("layer", 1)
+	
 	# Create a single RigidBody2D
 	var physics_body = RigidBody2D.new()
 	physics_body.gravity_scale = 1.0
+	
+	# Set collision layers
+	# collision_layer: what layer this body is on
+	# collision_mask: what layers it can collide with
+	if body_layer == 1:
+		physics_body.collision_layer = 1 << LAYER_1_COLLISION_BIT  # Bit 0 = value 1
+		physics_body.collision_mask = (1 << LAYER_1_COLLISION_BIT) | (1 << GROUND_COLLISION_BIT)  # Bits 0,2 = value 5
+	else:  # layer 2
+		physics_body.collision_layer = 1 << LAYER_2_COLLISION_BIT  # Bit 1 = value 2
+		physics_body.collision_mask = (1 << LAYER_2_COLLISION_BIT) | (1 << GROUND_COLLISION_BIT)  # Bits 1,2 = value 6
+	
+	print("Created body on layer ", body_layer, " - collision_layer: ", physics_body.collision_layer, " collision_mask: ", physics_body.collision_mask)
+	
+	# Store layer metadata
+	physics_body.set_meta("layer", body_layer)
 	
 	# Build a map of point -> stroke_data for material lookup
 	var point_to_stroke: Dictionary = {}
@@ -1228,6 +1426,12 @@ func create_physics_body_for_points(points: Array, strokes: Array) -> void:
 	
 	get_parent().add_child(physics_body)
 	
+	# Set z_index based on layer (Layer 1 = front, Layer 2 = back)
+	physics_body.z_index = 10 if body_layer == 1 else 5
+	
+	# Apply layer visual modulation
+	apply_layer_modulation(physics_body, body_layer)
+	
 	# If physics is paused, freeze this body immediately
 	if is_physics_paused:
 		physics_body.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC
@@ -1249,12 +1453,14 @@ func update_merge_highlights() -> void:
 		for point in stroke_data["points"]:
 			all_drawing_points.append(point)
 	
-	# Find bodies that could be merged with current drawing
+	# Find bodies that could be merged with current drawing (same layer only)
 	var bodies_in_range: Array[RigidBody2D] = []
 	
 	for point in all_drawing_points:
 		for body in existing_drawn_bodies:
-			if is_point_near_body(point, body) and body not in bodies_in_range:
+			# Only merge bodies on the same layer
+			var body_layer = body.get_meta("layer", 1)
+			if body_layer == current_layer and is_point_near_body(point, body) and body not in bodies_in_range:
 				bodies_in_range.append(body)
 	
 	# Update visual highlighting on all bodies (all Line2D children)

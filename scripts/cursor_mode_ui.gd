@@ -5,27 +5,35 @@ signal tool_changed(tool_name: String)
 signal material_changed(material: DrawMaterial)
 signal physics_paused(paused: bool)
 signal brush_shape_changed(shape: String)
+signal layer_changed(layer_number: int)
+signal show_other_layers_changed(show: bool)
 
 @onready var cursor_mode_button: Button = %CursorModeButton
 @onready var tool_panel: PanelContainer = %ToolPanel
-@onready var draw_dynamic_button: Button = %DrawDynamicButton
-@onready var draw_static_button: Button = %DrawStaticButton
-@onready var eraser_button: Button = %EraserButton
-@onready var select_button: Button = %SelectButton
-@onready var wood_button: Button = %WoodButton
-@onready var stone_button: Button = %StoneButton
-@onready var metal_button: Button = %MetalButton
-@onready var brick_button: Button = %BrickButton
+@onready var draw_dynamic_button: CheckBox = %DrawDynamicButton
+@onready var draw_static_button: CheckBox = %DrawStaticButton
+@onready var eraser_button: CheckBox = %EraserButton
+@onready var select_button: CheckBox = %SelectButton
+@onready var wood_button: CheckBox = %WoodButton
+@onready var stone_button: CheckBox = %StoneButton
+@onready var metal_button: CheckBox = %MetalButton
+@onready var brick_button: CheckBox = %BrickButton
 @onready var pause_button: Button = %PauseButton
 @onready var pause_indicator: PanelContainer = %PauseIndicator
-@onready var circle_brush_button: Button = %CircleBrushButton
-@onready var square_brush_button: Button = %SquareBrushButton
+@onready var circle_brush_button: CheckBox = %CircleBrushButton
+@onready var square_brush_button: CheckBox = %SquareBrushButton
+@onready var layer1_button: CheckBox = %Layer1Button
+@onready var layer2_button: CheckBox = %Layer2Button
+@onready var show_other_layers_button: Button = %ShowOtherLayersButton
 @onready var transform_mode_label: Label = %TransformModeLabel
+@onready var current_layer_label: Label = %CurrentLayerLabel
 
 var current_tool: String = "draw_dynamic"
 var current_material: DrawMaterial = null
 var is_physics_paused: bool = false
 var current_brush_shape: String = "circle"
+var current_layer: int = 1
+var show_other_layers: bool = true
 
 # Transform mode colors
 var transform_mode_colors: Dictionary = {
@@ -39,6 +47,27 @@ var materials: Dictionary = {}
 
 
 func _ready() -> void:
+	# Create button groups for radio button behavior
+	var tool_button_group = ButtonGroup.new()
+	draw_dynamic_button.button_group = tool_button_group
+	draw_static_button.button_group = tool_button_group
+	eraser_button.button_group = tool_button_group
+	select_button.button_group = tool_button_group
+	
+	var material_button_group = ButtonGroup.new()
+	wood_button.button_group = material_button_group
+	stone_button.button_group = material_button_group
+	metal_button.button_group = material_button_group
+	brick_button.button_group = material_button_group
+	
+	var brush_shape_button_group = ButtonGroup.new()
+	circle_brush_button.button_group = brush_shape_button_group
+	square_brush_button.button_group = brush_shape_button_group
+	
+	var layer_button_group = ButtonGroup.new()
+	layer1_button.button_group = layer_button_group
+	layer2_button.button_group = layer_button_group
+	
 	# Initialize materials
 	materials["wood"] = DrawMaterial.create_wood()
 	materials["stone"] = DrawMaterial.create_stone()
@@ -74,6 +103,11 @@ func _ready() -> void:
 	circle_brush_button.pressed.connect(_on_circle_brush_pressed)
 	square_brush_button.pressed.connect(_on_square_brush_pressed)
 	
+	# Connect layer buttons
+	layer1_button.pressed.connect(_on_layer1_pressed)
+	layer2_button.pressed.connect(_on_layer2_pressed)
+	show_other_layers_button.pressed.connect(_on_show_other_layers_pressed)
+	
 	# Find cursor and connect to mode changes
 	await get_tree().process_frame
 	var cursor = get_tree().get_first_node_in_group("cursor")
@@ -85,6 +119,9 @@ func _ready() -> void:
 	
 	# Emit initial brush shape
 	brush_shape_changed.emit(current_brush_shape)
+	
+	# Emit initial layer
+	layer_changed.emit(current_layer)
 
 
 func _on_cursor_mode_button_pressed() -> void:
@@ -141,6 +178,19 @@ func _on_square_brush_pressed() -> void:
 	set_brush_shape("square")
 
 
+func _on_layer1_pressed() -> void:
+	change_layer(1)
+
+
+func _on_layer2_pressed() -> void:
+	change_layer(2)
+
+
+func _on_show_other_layers_pressed() -> void:
+	show_other_layers = show_other_layers_button.button_pressed
+	show_other_layers_changed.emit(show_other_layers)
+
+
 func set_brush_shape(shape: String) -> void:
 	current_brush_shape = shape
 	
@@ -186,6 +236,26 @@ func get_current_tool() -> String:
 
 func get_current_material() -> DrawMaterial:
 	return current_material
+
+
+func change_layer(layer_number: int) -> void:
+	current_layer = layer_number
+	
+	# Update button states
+	layer1_button.button_pressed = (layer_number == 1)
+	layer2_button.button_pressed = (layer_number == 2)
+	
+	# Update current layer label
+	if layer_number == 1:
+		current_layer_label.text = "Layer 1 (Front)"
+	else:
+		current_layer_label.text = "Layer 2 (Back)"
+	
+	layer_changed.emit(layer_number)
+
+
+func get_current_layer() -> int:
+	return current_layer
 
 
 func _input(event: InputEvent) -> void:
