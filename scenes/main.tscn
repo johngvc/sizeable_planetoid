@@ -8,6 +8,7 @@
 [ext_resource type="PackedScene" uid="uid://cdrawmanager123" path="res://scenes/draw_manager.tscn" id="6_draw"]
 [ext_resource type="PackedScene" path="res://scenes/cursor_mode_ui.tscn" id="7_cursor_ui"]
 [ext_resource type="PackedScene" path="res://scenes/select_move_manager.tscn" id="8_select_move"]
+[ext_resource type="PackedScene" uid="uid://cboundary12345" path="res://scenes/boundary.tscn" id="9_boundary"]
 [ext_resource type="Script" path="res://scripts/bolt_tool.gd" id="10_bolt_tool"]
 
 [node name="Main" type="Node2D"]
@@ -43,6 +44,12 @@ script = ExtResource("3_camera")
 
 [node name="Ground" parent="." instance=ExtResource("2_ground_scene")]
 position = Vector2(0, 100)
+
+[node name="Boundary" parent="." instance=ExtResource("9_boundary")]
+left_boundary_x = -400
+right_boundary_x = 400
+ground_y = 100
+ceiling_height = -500
 
 [node name="Player" parent="." instance=ExtResource("1_player_scene")]
 position = Vector2(0, 50)

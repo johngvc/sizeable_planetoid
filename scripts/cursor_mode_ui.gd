@@ -31,6 +31,7 @@ signal toolbox_tool_changed(toolbox_tool: String)
 @onready var current_layer_label: Label = %CurrentLayerLabel
 @onready var toolbox_panel: PanelContainer = %ToolboxPanel
 @onready var bolt_tool_button: CheckBox = %BoltToolButton
+@onready var fly_mode_indicator: PanelContainer = %FlyModeIndicator
 
 var current_tool: String = "draw_dynamic"
 var current_material: DrawMaterial = null
@@ -76,6 +77,25 @@ func _ready() -> void:
 	
 	var toolbox_tool_button_group = ButtonGroup.new()
 	bolt_tool_button.button_group = toolbox_tool_button_group
+	
+	# Disable space key activation for all buttons
+	_disable_space_for_button(cursor_mode_button)
+	_disable_space_for_button(draw_dynamic_button)
+	_disable_space_for_button(draw_static_button)
+	_disable_space_for_button(eraser_button)
+	_disable_space_for_button(select_button)
+	_disable_space_for_button(toolbox_button)
+	_disable_space_for_button(wood_button)
+	_disable_space_for_button(stone_button)
+	_disable_space_for_button(metal_button)
+	_disable_space_for_button(brick_button)
+	_disable_space_for_button(pause_button)
+	_disable_space_for_button(circle_brush_button)
+	_disable_space_for_button(square_brush_button)
+	_disable_space_for_button(layer1_button)
+	_disable_space_for_button(layer2_button)
+	_disable_space_for_button(show_other_layers_button)
+	_disable_space_for_button(bolt_tool_button)
 	
 	# Initialize materials
 	materials["wood"] = DrawMaterial.create_wood()
@@ -131,6 +151,11 @@ func _ready() -> void:
 	if cursor:
 		cursor.cursor_mode_changed.connect(_on_cursor_mode_changed)
 	
+	# Find player and connect to fly mode changes
+	var player = get_tree().get_first_node_in_group("player")
+	if player:
+		player.fly_mode_changed.connect(_on_fly_mode_changed)
+	
 	# Emit initial material
 	material_changed.emit(current_material)
 	
@@ -153,6 +178,11 @@ func _on_cursor_mode_changed(active: bool) -> void:
 	if active:
 		# Reset to draw dynamic tool when opening cursor mode
 		set_tool("draw_dynamic")
+
+
+func _on_fly_mode_changed(active: bool) -> void:
+	if fly_mode_indicator:
+		fly_mode_indicator.visible = active
 
 
 func _on_draw_dynamic_pressed() -> void:
@@ -332,3 +362,15 @@ func update_transform_mode_label(mode_name: String) -> void:
 func show_transform_mode_label(visible: bool) -> void:
 	if transform_mode_label:
 		transform_mode_label.visible = visible
+
+
+func _disable_space_for_button(button: BaseButton) -> void:
+	"""Disable space key activation for a button to prevent accidental jumps"""
+	if button:
+		# Remove ui_accept shortcut that responds to space
+		button.shortcut_in_tooltip = false
+		# Override the button's input handling
+		button.gui_input.connect(func(event: InputEvent):
+			if event is InputEventKey and event.keycode == KEY_SPACE:
+				get_viewport().set_input_as_handled()
+		)
