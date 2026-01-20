@@ -5,7 +5,7 @@ extends Node2D
 
 const DRAW_SIZE: float = 16.0  # Size/width of the brush stroke
 const MIN_DRAW_DISTANCE: float = 4.0  # Distance between draw points for smooth brush
-const MERGE_DISTANCE: float = 24.0  # Distance threshold for merging strokes
+const MERGE_DISTANCE: float = 12.0  # Distance threshold for merging strokes
 
 # Shader for world-space UV mapping
 var world_uv_shader: Shader = null

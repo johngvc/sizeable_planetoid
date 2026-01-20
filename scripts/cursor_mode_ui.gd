@@ -293,9 +293,18 @@ func get_current_layer() -> int:
 	return current_layer
 
 
-func _input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and event.keycode == KEY_P:
-		toggle_physics_pause()
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo:
+		match event.keycode:
+			KEY_P:
+				toggle_physics_pause()
+				get_viewport().set_input_as_handled()
+			KEY_1:
+				change_layer(1)
+				get_viewport().set_input_as_handled()
+			KEY_2:
+				change_layer(2)
+				get_viewport().set_input_as_handled()
 
 
 func _on_pause_button_pressed() -> void:
