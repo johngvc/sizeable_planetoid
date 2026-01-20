@@ -1,0 +1,57 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/toolbox_ui.gd" id="1_script"]
+
+[node name="ToolboxUI" type="CanvasLayer" groups=["toolbox_ui"]]
+layer = 10
+script = ExtResource("1_script")
+
+[node name="ToolboxButton" type="Button" parent="."]
+unique_name_in_owner = true
+offset_left = 330.0
+offset_top = 10.0
+offset_right = 480.0
+offset_bottom = 50.0
+theme_override_font_sizes/font_size = 16
+text = "🧰 Toolbox (T)"
+
+[node name="ToolPanel" type="PanelContainer" parent="."]
+unique_name_in_owner = true
+visible = false
+anchors_preset = 4
+anchor_top = 0.5
+anchor_bottom = 0.5
+offset_left = 10.0
+offset_top = -200.0
+offset_right = 180.0
+offset_bottom = 200.0
+grow_vertical = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="ToolPanel"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="ToolsLabel" type="Label" parent="ToolPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "🧰 Tools"
+horizontal_alignment = 1
+
+[node name="BoltToolButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+button_pressed = true
+text = "🔩 Bolt"
+
+[node name="Separator" type="HSeparator" parent="ToolPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="InstructionLabel" type="Label" parent="ToolPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "Click on objects to place bolts.
+
+Bolts connect Layer 1 (front) to Layer 2 (back) objects."
+autowrap_mode = 3
