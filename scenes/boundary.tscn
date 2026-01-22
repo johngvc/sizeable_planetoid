@@ -43,8 +43,8 @@ texture = ExtResource("2_grass")
 3:2/0/flip_v = true
 
 [sub_resource type="TileSet" id="TileSet_boundary"]
-physics_layer_0/collision_layer = 4
-physics_layer_0/collision_mask = 7
+physics_layer_0/collision_layer = 8
+physics_layer_0/collision_mask = 3
 sources/0 = SubResource("TileSetAtlasSource_boundary")
 
 [node name="Boundary" type="Node2D"]
