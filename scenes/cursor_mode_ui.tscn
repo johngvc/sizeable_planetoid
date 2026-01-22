@@ -107,6 +107,13 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 13
 text = "🧱 Brick"
 
+[node name="PlasterButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 36)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "🎨 Plaster"
+
 [node name="Separator2" type="HSeparator" parent="ToolPanel/VBoxContainer"]
 layout_mode = 2
 

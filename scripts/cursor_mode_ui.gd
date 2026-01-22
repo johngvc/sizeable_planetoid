@@ -20,6 +20,7 @@ signal toolbox_tool_changed(toolbox_tool: String)
 @onready var stone_button: CheckBox = %StoneButton
 @onready var metal_button: CheckBox = %MetalButton
 @onready var brick_button: CheckBox = %BrickButton
+@onready var plaster_button: CheckBox = %PlasterButton
 @onready var pause_button: Button = %PauseButton
 @onready var pause_indicator: PanelContainer = %PauseIndicator
 @onready var circle_brush_button: CheckBox = %CircleBrushButton
@@ -66,6 +67,7 @@ func _ready() -> void:
 	stone_button.button_group = material_button_group
 	metal_button.button_group = material_button_group
 	brick_button.button_group = material_button_group
+	plaster_button.button_group = material_button_group
 	
 	var brush_shape_button_group = ButtonGroup.new()
 	circle_brush_button.button_group = brush_shape_button_group
@@ -89,6 +91,7 @@ func _ready() -> void:
 	_disable_space_for_button(stone_button)
 	_disable_space_for_button(metal_button)
 	_disable_space_for_button(brick_button)
+	_disable_space_for_button(plaster_button)
 	_disable_space_for_button(pause_button)
 	_disable_space_for_button(circle_brush_button)
 	_disable_space_for_button(square_brush_button)
@@ -102,6 +105,7 @@ func _ready() -> void:
 	materials["stone"] = DrawMaterial.create_stone()
 	materials["metal"] = DrawMaterial.create_metal()
 	materials["brick"] = DrawMaterial.create_brick()
+	materials["plaster"] = DrawMaterial.create_plaster()
 	
 	# Load textures
 	for mat in materials.values():
@@ -126,6 +130,7 @@ func _ready() -> void:
 	stone_button.pressed.connect(_on_stone_pressed)
 	metal_button.pressed.connect(_on_metal_pressed)
 	brick_button.pressed.connect(_on_brick_pressed)
+	plaster_button.pressed.connect(_on_plaster_pressed)
 	
 	# Connect cursor mode button
 	cursor_mode_button.pressed.connect(_on_cursor_mode_button_pressed)
@@ -225,6 +230,10 @@ func _on_brick_pressed() -> void:
 	set_material("brick")
 
 
+func _on_plaster_pressed() -> void:
+	set_material("plaster")
+
+
 func _on_circle_brush_pressed() -> void:
 	set_brush_shape("circle")
 
@@ -291,6 +300,7 @@ func set_material(material_name: String) -> void:
 		stone_button.button_pressed = (material_name == "stone")
 		metal_button.button_pressed = (material_name == "metal")
 		brick_button.button_pressed = (material_name == "brick")
+		plaster_button.button_pressed = (material_name == "plaster")
 		
 		material_changed.emit(current_material)
 
