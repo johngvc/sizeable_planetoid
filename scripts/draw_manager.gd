@@ -477,25 +477,60 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 			if body in existing_static_bodies:
 				existing_static_bodies.erase(body)
 	else:
-		# Multiple polygons remain - for now, keep only the largest one
-		# TODO: Create separate bodies for each remaining polygon
-		var largest_polygon = clipped[0]
-		var largest_area = calculate_polygon_area(largest_polygon)
+		# Multiple polygons remain - keep first in original body, create new bodies for others
+		# Get properties from original body
+		var body_layer = body.get_meta("layer", 1)
+		var body_material = visual_polygon.material
+		var is_static = body is StaticBody2D
 		
-		for i in range(1, clipped.size()):
-			var poly = clipped[i]
-			var area = calculate_polygon_area(poly)
-			if area > largest_area:
-				largest_polygon = poly
-				largest_area = area
+		# Sort polygons by area (largest first)
+		var polygon_data = []
+		for poly in clipped:
+			if poly.size() >= 3:
+				var area = calculate_polygon_area(poly)
+				polygon_data.append({"polygon": poly, "area": area})
 		
-		if largest_polygon.size() >= 3:
-			visual_polygon.polygon = largest_polygon
-			collision_polygon.polygon = largest_polygon
+		polygon_data.sort_custom(func(a, b): return a["area"] > b["area"])
+		
+		if polygon_data.size() > 0:
+			# Update original body with largest piece
+			var largest = polygon_data[0]
+			visual_polygon.polygon = largest["polygon"]
+			collision_polygon.polygon = largest["polygon"]
 			
 			# Update mass if it's a RigidBody2D
 			if body is RigidBody2D:
-				body.mass = max(0.1, largest_area * 0.01)
+				body.mass = max(0.1, largest["area"] * 0.01)
+			
+			# Create new bodies for remaining pieces
+			for i in range(1, polygon_data.size()):
+				var piece_data = polygon_data[i]
+				var piece_polygon = piece_data["polygon"]
+				
+				# Convert polygon to world space (it's currently in body's local space)
+				var world_polygon = PackedVector2Array()
+				for point in piece_polygon:
+					world_polygon.append(body.to_global(point))
+				
+				# Create new physics body for this piece
+				# Extract material properties from original body if available
+				var piece_material = null
+				if body is RigidBody2D and body.physics_material_override != null:
+					var phys_mat = body.physics_material_override
+					# Create a DrawMaterial that approximates the physics material
+					piece_material = DrawMaterial.new()
+					piece_material.friction = phys_mat.friction
+					piece_material.bounce = phys_mat.bounce
+					piece_material.density = body.mass / max(0.1, calculate_polygon_area(visual_polygon.polygon))
+				
+				create_physics_body_from_polygon(world_polygon, piece_material, body_material, is_static, body_layer)
+		else:
+			# All pieces too small, remove body
+			body.queue_free()
+			if body in existing_drawn_bodies:
+				existing_drawn_bodies.erase(body)
+			if body in existing_static_bodies:
+				existing_static_bodies.erase(body)
 
 
 func start_new_polygon_preview() -> void:
