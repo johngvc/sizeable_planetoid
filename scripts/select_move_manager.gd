@@ -312,40 +312,16 @@ func find_body_at_position(pos: Vector2) -> PhysicsBody2D:
 
 
 func find_stroke_at_position(pos: Vector2) -> Dictionary:
-	# Find a brush stroke (preview node) near this position
+	# Find a brush stroke (physics body) near this position
 	# Returns { "index": stroke_index, "node": Node2D } or { "index": -1, "node": null }
 	
-	if draw_manager == null:
-		return { "index": -1, "node": null }
-	
-	# Check finished strokes (preview_nodes array corresponds to all_strokes)
-	if draw_manager.preview_nodes.size() > 0 and draw_manager.all_strokes.size() > 0:
-		for i in range(draw_manager.preview_nodes.size()):
-			var node = draw_manager.preview_nodes[i]
-			if is_instance_valid(node) and is_point_near_preview_node(pos, node):
-				return { "index": i, "node": node }
+	# Since we now use polygon-based physics bodies immediately,
+	# strokes are already physics bodies - just find the body at this position
+	var body = find_body_at_position(pos)
+	if body != null:
+		return { "index": 0, "node": body }  # Index not used for polygon system
 	
 	return { "index": -1, "node": null }
-
-
-func is_point_near_preview_node(pos: Vector2, node: Node2D) -> bool:
-	# Check if pos is within SELECTION_RADIUS of any point on the preview node
-	if node is Line2D:
-		var line = node as Line2D
-		for i in range(line.get_point_count()):
-			var line_point = line.get_point_position(i)
-			var global_point = line.to_global(line_point)
-			if pos.distance_to(global_point) <= SELECTION_RADIUS:
-				return true
-	else:
-		# It's a container with ColorRects
-		for child in node.get_children():
-			if child is ColorRect:
-				var center = child.position + child.size / 2.0
-				var global_point = node.to_global(center)
-				if pos.distance_to(global_point) <= SELECTION_RADIUS:
-					return true
-	return false
 
 
 func start_dragging_body(body: PhysicsBody2D, cursor_pos: Vector2) -> void:

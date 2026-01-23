@@ -6,6 +6,7 @@ extends Node2D
 const DRAW_SIZE: float = 16.0  # Size/width of the brush stroke (radius for circle, half-size for square)
 const MIN_DRAW_DISTANCE: float = 4.0  # Distance threshold before applying merge (5% of brush diameter)
 const MERGE_DISTANCE: float = 12.0  # Distance threshold for merging objects (deprecated - will use polygon overlap instead)
+const MIN_POLYGON_AREA: float = 100.0  # Minimum area (in pixels²) for a polygon to be kept - filters out tiny fragments
 
 # Shader for world-space UV mapping
 var world_uv_shader: Shader = null
@@ -257,8 +258,8 @@ func create_brush_polygon(center: Vector2, brush_shape: String) -> PackedVector2
 		polygon.append(center + Vector2(radius, radius))
 		polygon.append(center + Vector2(-radius, radius))
 	else:  # circle
-		# Create circle approximation with 16 vertices
-		var segments = 16
+		# Create circle approximation with 48 vertices for ultra-smooth blending
+		var segments = 48
 		for i in range(segments):
 			var angle = (float(i) / segments) * TAU
 			polygon.append(center + Vector2(cos(angle), sin(angle)) * radius)
@@ -295,11 +296,65 @@ func clip_brush_from_polygon(polygon: PackedVector2Array, brush_pos: Vector2, br
 
 
 func simplify_polygon(polygon: PackedVector2Array) -> PackedVector2Array:
-	"""Simplifies a polygon by removing redundant vertices using Douglas-Peucker-like approach"""
-	# For now, use a simple approach - Godot doesn't have built-in polygon simplification
-	# We could implement RDP algorithm here, but for MVP just return the polygon
-	# TODO: Implement proper RDP simplification
-	return polygon
+	"""Simplifies a polygon by removing redundant vertices using Ramer-Douglas-Peucker algorithm"""
+	if polygon.size() < 4:
+		return polygon
+	
+	# Use epsilon for simplification tolerance (in pixels)
+	var epsilon = 2.0  # Higher = more simplification, lower = more accurate
+	
+	return ramer_douglas_peucker(polygon, epsilon)
+
+
+func ramer_douglas_peucker(points: PackedVector2Array, epsilon: float) -> PackedVector2Array:
+	"""Implements the Ramer-Douglas-Peucker algorithm for polygon simplification"""
+	if points.size() < 3:
+		return points
+	
+	# Find the point with maximum distance from line between first and last
+	var dmax = 0.0
+	var index = 0
+	var end = points.size() - 1
+	
+	for i in range(1, end):
+		var d = perpendicular_distance(points[i], points[0], points[end])
+		if d > dmax:
+			index = i
+			dmax = d
+	
+	# If max distance is greater than epsilon, recursively simplify
+	if dmax > epsilon:
+		# Recursive call
+		var rec_results1 = ramer_douglas_peucker(points.slice(0, index + 1), epsilon)
+		var rec_results2 = ramer_douglas_peucker(points.slice(index), epsilon)
+		
+		# Build result list
+		var result = PackedVector2Array()
+		for i in range(rec_results1.size() - 1):
+			result.append(rec_results1[i])
+		for i in range(rec_results2.size()):
+			result.append(rec_results2[i])
+		
+		return result
+	else:
+		# All points between first and last can be discarded
+		return PackedVector2Array([points[0], points[end]])
+
+
+func perpendicular_distance(point: Vector2, line_start: Vector2, line_end: Vector2) -> float:
+	"""Calculates the perpendicular distance from a point to a line"""
+	var dx = line_end.x - line_start.x
+	var dy = line_end.y - line_start.y
+	
+	# Handle degenerate case where line_start == line_end
+	if dx == 0 and dy == 0:
+		return point.distance_to(line_start)
+	
+	# Calculate distance using the cross product formula
+	var numerator = abs(dy * point.x - dx * point.y + line_end.x * line_start.y - line_end.y * line_start.x)
+	var denominator = sqrt(dx * dx + dy * dy)
+	
+	return numerator / denominator
 
 
 func _process(_delta: float) -> void:
@@ -358,16 +413,25 @@ func _process(_delta: float) -> void:
 		else:
 			# Continue drawing current polygon
 			var distance_since_last_merge = draw_pos.distance_to(last_merge_position)
-			var merge_threshold = DRAW_SIZE * 0.05  # 5% of brush diameter
+			var merge_threshold = DRAW_SIZE * 0.15  # 15% of brush diameter for ultra-smooth strokes
 			
 			if distance_since_last_merge >= merge_threshold:
-				# Merge brush at current position into polygon
-				current_polygon = merge_brush_into_polygon(current_polygon, draw_pos, current_polygon_brush_shape)
-				last_merge_position = draw_pos
-				merge_count += 1
+				# Calculate how many steps needed to ensure continuous coverage
+				# Use brush diameter * 0.35 as max step for maximum overlap and smoothness
+				var max_step = DRAW_SIZE * 0.35
+				var steps = max(1, int(ceil(distance_since_last_merge / max_step)))
 				
-				# Simplify every 10 merges to reduce vertex count
-				if merge_count % 10 == 0:
+				# Interpolate and merge at each step to prevent gaps
+				for i in range(1, steps + 1):
+					var t = float(i) / float(steps)
+					var interp_pos = last_merge_position.lerp(draw_pos, t)
+					current_polygon = merge_brush_into_polygon(current_polygon, interp_pos, current_polygon_brush_shape)
+					merge_count += 1
+				
+				last_merge_position = draw_pos
+				
+				# Simplify every 50 merges to reduce vertex count while preserving smoothness
+				if merge_count % 50 == 0:
 					current_polygon = simplify_polygon(current_polygon)
 				
 				update_polygon_preview()
@@ -461,14 +525,51 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 		# Single polygon remains - update it
 		var new_polygon = clipped[0]
 		if new_polygon.size() >= 3:
+			# Keep polygon as-is without recentering
 			visual_polygon.polygon = new_polygon
-			collision_polygon.polygon = new_polygon
+			
+			# Remove all existing collision polygons and recreate with convex decomposition
+			for child in body.get_children():
+				if child is CollisionPolygon2D:
+					child.queue_free()
+			
+			# Simplify before decomposition
+			var simplified_polygon = simplify_polygon(new_polygon)
+			# Create new collision polygons with convex decomposition
+			var convex_polygons = Geometry2D.decompose_polygon_in_convex(simplified_polygon)
+			# Limit complexity
+			if convex_polygons.size() > 8:
+				# Too complex - use simplified as single piece
+				var simple_collision = CollisionPolygon2D.new()
+				simple_collision.polygon = simplified_polygon
+				simple_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
+				body.add_child(simple_collision)
+			elif convex_polygons.size() > 0:
+				for convex_poly in convex_polygons:
+					var convex_collision = CollisionPolygon2D.new()
+					convex_collision.polygon = convex_poly
+					convex_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
+					body.add_child(convex_collision)
+			else:
+				# Fallback to original polygon if decomposition fails
+				var fallback_collision = CollisionPolygon2D.new()
+				fallback_collision.polygon = simplified_polygon
+				fallback_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
+				body.add_child(fallback_collision)
+			
+			# Update debug Line2D if it exists
+			for child in body.get_children():
+				if child is Line2D and child.default_color == Color(1.0, 0.0, 0.0, 1.0):
+					child.clear_points()
+					for point in new_polygon:
+						child.add_point(point)
+					child.add_point(new_polygon[0])  # Close the shape
+					break
 			
 			# Update mass if it's a RigidBody2D
 			if body is RigidBody2D:
 				var area = calculate_polygon_area(new_polygon)
-				var old_mass = body.mass
-				body.mass = max(0.1, area * 0.01)  # Preserve density ratio
+				body.mass = max(5.0, area * 0.02)  # Use updated mass parameters
 		else:
 			# Polygon too small, remove body
 			body.queue_free()
@@ -488,36 +589,73 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 		for poly in clipped:
 			if poly.size() >= 3:
 				var area = calculate_polygon_area(poly)
-				polygon_data.append({"polygon": poly, "area": area})
+				# Only keep polygons that meet minimum area threshold
+				if area >= MIN_POLYGON_AREA:
+					polygon_data.append({"polygon": poly, "area": area})
 		
 		polygon_data.sort_custom(func(a, b): return a["area"] > b["area"])
 		
 		if polygon_data.size() > 0:
-			# Update original body with largest piece
+			# Keep largest piece in original body without recentering
 			var largest = polygon_data[0]
 			visual_polygon.polygon = largest["polygon"]
-			collision_polygon.polygon = largest["polygon"]
+			
+			# Remove all existing collision polygons and recreate with convex decomposition
+			for child in body.get_children():
+				if child is CollisionPolygon2D:
+					child.queue_free()
+			
+			# Simplify before decomposition
+			var simplified_polygon = simplify_polygon(largest["polygon"])
+			# Create new collision polygons with convex decomposition
+			var convex_polygons = Geometry2D.decompose_polygon_in_convex(simplified_polygon)
+			# Limit complexity
+			if convex_polygons.size() > 8:
+				# Too complex - use simplified as single piece
+				var simple_collision = CollisionPolygon2D.new()
+				simple_collision.polygon = simplified_polygon
+				simple_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
+				body.add_child(simple_collision)
+			elif convex_polygons.size() > 0:
+				for convex_poly in convex_polygons:
+					var convex_collision = CollisionPolygon2D.new()
+					convex_collision.polygon = convex_poly
+					convex_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
+					body.add_child(convex_collision)
+			else:
+				# Fallback to original polygon if decomposition fails
+				var fallback_collision = CollisionPolygon2D.new()
+				fallback_collision.polygon = simplified_polygon
+				fallback_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
+				body.add_child(fallback_collision)
+			
+			# Update debug Line2D if it exists
+			for child in body.get_children():
+				if child is Line2D and child.default_color == Color(1.0, 0.0, 0.0, 1.0):
+					child.clear_points()
+					for point in largest["polygon"]:
+						child.add_point(point)
+					child.add_point(largest["polygon"][0])  # Close the shape
+					break
 			
 			# Update mass if it's a RigidBody2D
 			if body is RigidBody2D:
-				body.mass = max(0.1, largest["area"] * 0.01)
+				var area = calculate_polygon_area(largest["polygon"])
+				body.mass = max(5.0, area * 0.02)  # Use updated mass parameters
 			
 			# Create new bodies for remaining pieces
 			for i in range(1, polygon_data.size()):
-				var piece_data = polygon_data[i]
-				var piece_polygon = piece_data["polygon"]
+				var piece_polygon = polygon_data[i]["polygon"]
 				
-				# Convert polygon to world space (it's currently in body's local space)
+				# Convert to world space
 				var world_polygon = PackedVector2Array()
 				for point in piece_polygon:
 					world_polygon.append(body.to_global(point))
 				
-				# Create new physics body for this piece
-				# Extract material properties from original body if available
+				# Extract material properties
 				var piece_material = null
 				if body is RigidBody2D and body.physics_material_override != null:
 					var phys_mat = body.physics_material_override
-					# Create a DrawMaterial that approximates the physics material
 					piece_material = DrawMaterial.new()
 					piece_material.friction = phys_mat.friction
 					piece_material.bounce = phys_mat.bounce
@@ -536,7 +674,7 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 func start_new_polygon_preview() -> void:
 	"""Creates a Polygon2D preview for the polygon being drawn"""
 	current_preview_polygon = Polygon2D.new()
-	current_preview_polygon.color = Color.WHITE
+	current_preview_polygon.color = Color(1.0, 1.0, 1.0, 0.5)  # Semi-transparent for debugging
 	current_preview_polygon.material = current_polygon_shader
 	# Set z_index based on layer (Layer 1 = front, Layer 2 = back)
 	current_preview_polygon.z_index = 10 if current_layer == 1 else 5
@@ -566,6 +704,20 @@ func finish_current_polygon() -> void:
 	
 	# Final simplification
 	current_polygon = simplify_polygon(current_polygon)
+	
+	# Check if polygon area is too small
+	var polygon_area = calculate_polygon_area(current_polygon)
+	if polygon_area < MIN_POLYGON_AREA:
+		print("Polygon too small (area: ", polygon_area, "), discarding")
+		if current_preview_polygon != null:
+			current_preview_polygon.queue_free()
+			current_preview_polygon = null
+		current_polygon = PackedVector2Array()
+		current_polygon_material = null
+		current_polygon_shader = null
+		current_polygon_is_static = false
+		current_polygon_brush_shape = "circle"
+		return
 	
 	# Check if this polygon overlaps with existing bodies on the same layer
 	var overlapping_bodies = find_overlapping_bodies(current_polygon, current_layer)
@@ -674,6 +826,12 @@ func create_physics_body_from_polygon(polygon: PackedVector2Array, material: Dra
 	if polygon.size() < 3:
 		return
 	
+	# Check minimum area threshold
+	var polygon_area = calculate_polygon_area(polygon)
+	if polygon_area < MIN_POLYGON_AREA:
+		print("Skipping body creation - polygon too small (area: ", polygon_area, ")")
+		return
+	
 	# Calculate center of polygon for positioning
 	var center = Vector2.ZERO
 	for point in polygon:
@@ -698,15 +856,26 @@ func create_physics_body_from_polygon(polygon: PackedVector2Array, material: Dra
 		var density = 1.0
 		if material != null:
 			density = material.density
-		physics_body.mass = max(1.0, area * density * 0.01)
+		physics_body.mass = max(5.0, area * density * 0.02)  # Increased minimum mass and density multiplier
 		
-		# Set physics material
+		# Enable continuous collision detection for stability
+		physics_body.continuous_cd = RigidBody2D.CCD_MODE_CAST_SHAPE
+		
+		# Add damping to reduce excessive motion
+		physics_body.linear_damp = 0.5  # Slow down linear motion
+		physics_body.angular_damp = 2.0  # Reduce spinning significantly
+		
+		# Adjust sleep settings for better stability
+		physics_body.can_sleep = true
+		physics_body.lock_rotation = false
+		
+		# Set physics material with higher friction for stability
 		var phys_mat = PhysicsMaterial.new()
 		if material != null:
-			phys_mat.friction = material.friction
-			phys_mat.bounce = material.bounce
+			phys_mat.friction = max(0.8, material.friction)  # Minimum friction for stability
+			phys_mat.bounce = min(0.2, material.bounce)  # Reduce bounciness
 		else:
-			phys_mat.friction = 0.5
+			phys_mat.friction = 0.8
 			phys_mat.bounce = 0.1
 		physics_body.physics_material_override = phys_mat
 	
@@ -725,18 +894,49 @@ func create_physics_body_from_polygon(polygon: PackedVector2Array, material: Dra
 	# Store layer metadata
 	physics_body.set_meta("layer", layer)
 	
-	# Create CollisionPolygon2D
+	# Create CollisionPolygon2D with convex decomposition for stable physics
 	var collision_polygon = CollisionPolygon2D.new()
 	collision_polygon.polygon = local_polygon
-	collision_polygon.build_mode = CollisionPolygon2D.BUILD_SOLIDS  # Solid interior
-	physics_body.add_child(collision_polygon)
+	collision_polygon.build_mode = CollisionPolygon2D.BUILD_SOLIDS
+	# Simplify polygon before decomposition to reduce complexity
+	var simplified_polygon = simplify_polygon(local_polygon)
+	# Use convex decomposition to break complex concave shapes into stable convex pieces
+	# This prevents physics twitching and disappearing objects
+	var convex_polygons = Geometry2D.decompose_polygon_in_convex(simplified_polygon)
+	# Limit the number of convex pieces to prevent over-complexity (max 8 pieces)
+	if convex_polygons.size() > 8:
+		# Too complex - use simplified collision as single piece
+		collision_polygon.polygon = simplified_polygon
+		physics_body.add_child(collision_polygon)
+	elif convex_polygons.size() > 1:
+		# If decomposition produced multiple convex shapes, use them
+		collision_polygon.queue_free()
+		for convex_poly in convex_polygons:
+			var convex_collision = CollisionPolygon2D.new()
+			convex_collision.polygon = convex_poly
+			convex_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
+			physics_body.add_child(convex_collision)
+	else:
+		# Simple polygon, use as-is
+		physics_body.add_child(collision_polygon)
 	
 	# Create Polygon2D for visual
 	var visual_polygon = Polygon2D.new()
 	visual_polygon.polygon = local_polygon
-	visual_polygon.color = Color.WHITE
+	visual_polygon.color = Color(1.0, 1.0, 1.0, 0.5)  # Semi-transparent for debugging
 	visual_polygon.material = shader_mat
 	physics_body.add_child(visual_polygon)
+	
+	# Create debug Line2D to visualize collision shape
+	var debug_line = Line2D.new()
+	debug_line.width = 2.0
+	debug_line.default_color = Color(1.0, 0.0, 0.0, 1.0)  # Red outline
+	debug_line.antialiased = true
+	# Add all polygon points plus first point again to close the loop
+	for point in local_polygon:
+		debug_line.add_point(point)
+	debug_line.add_point(local_polygon[0])  # Close the shape
+	physics_body.add_child(debug_line)
 	
 	get_parent().add_child(physics_body)
 	
