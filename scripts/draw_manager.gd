@@ -258,8 +258,8 @@ func create_brush_polygon(center: Vector2, brush_shape: String) -> PackedVector2
 		polygon.append(center + Vector2(radius, radius))
 		polygon.append(center + Vector2(-radius, radius))
 	else:  # circle
-		# Create circle approximation with 48 vertices for ultra-smooth blending
-		var segments = 48
+		# Create circle approximation with 96 vertices for ultra-smooth blending
+		var segments = 96
 		for i in range(segments):
 			var angle = (float(i) / segments) * TAU
 			polygon.append(center + Vector2(cos(angle), sin(angle)) * radius)
@@ -301,7 +301,7 @@ func simplify_polygon(polygon: PackedVector2Array) -> PackedVector2Array:
 		return polygon
 	
 	# Use epsilon for simplification tolerance (in pixels)
-	var epsilon = 2.0  # Higher = more simplification, lower = more accurate
+	var epsilon = 0.5  # Higher = more simplification, lower = more accurate
 	
 	return ramer_douglas_peucker(polygon, epsilon)
 
@@ -533,15 +533,13 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 				if child is CollisionPolygon2D:
 					child.queue_free()
 			
-			# Simplify before decomposition
-			var simplified_polygon = simplify_polygon(new_polygon)
-			# Create new collision polygons with convex decomposition
-			var convex_polygons = Geometry2D.decompose_polygon_in_convex(simplified_polygon)
-			# Limit complexity
-			if convex_polygons.size() > 8:
-				# Too complex - use simplified as single piece
+			# Create collision polygons with convex decomposition (no simplification for smooth shapes)
+			var convex_polygons = Geometry2D.decompose_polygon_in_convex(new_polygon)
+			# Allow more pieces for smooth circular shapes
+			if convex_polygons.size() > 24:
+				# Too complex - use original polygon as single piece
 				var simple_collision = CollisionPolygon2D.new()
-				simple_collision.polygon = simplified_polygon
+				simple_collision.polygon = new_polygon
 				simple_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
 				body.add_child(simple_collision)
 			elif convex_polygons.size() > 0:
@@ -553,7 +551,7 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 			else:
 				# Fallback to original polygon if decomposition fails
 				var fallback_collision = CollisionPolygon2D.new()
-				fallback_collision.polygon = simplified_polygon
+				fallback_collision.polygon = new_polygon
 				fallback_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
 				body.add_child(fallback_collision)
 			
@@ -605,15 +603,13 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 				if child is CollisionPolygon2D:
 					child.queue_free()
 			
-			# Simplify before decomposition
-			var simplified_polygon = simplify_polygon(largest["polygon"])
-			# Create new collision polygons with convex decomposition
-			var convex_polygons = Geometry2D.decompose_polygon_in_convex(simplified_polygon)
-			# Limit complexity
-			if convex_polygons.size() > 8:
-				# Too complex - use simplified as single piece
+			# Create collision polygons with convex decomposition (no simplification for smooth shapes)
+			var convex_polygons = Geometry2D.decompose_polygon_in_convex(largest["polygon"])
+			# Allow more pieces for smooth circular shapes
+			if convex_polygons.size() > 24:
+				# Too complex - use original polygon as single piece
 				var simple_collision = CollisionPolygon2D.new()
-				simple_collision.polygon = simplified_polygon
+				simple_collision.polygon = largest["polygon"]
 				simple_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
 				body.add_child(simple_collision)
 			elif convex_polygons.size() > 0:
@@ -625,7 +621,7 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 			else:
 				# Fallback to original polygon if decomposition fails
 				var fallback_collision = CollisionPolygon2D.new()
-				fallback_collision.polygon = simplified_polygon
+				fallback_collision.polygon = largest["polygon"]
 				fallback_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
 				body.add_child(fallback_collision)
 			
@@ -898,15 +894,12 @@ func create_physics_body_from_polygon(polygon: PackedVector2Array, material: Dra
 	var collision_polygon = CollisionPolygon2D.new()
 	collision_polygon.polygon = local_polygon
 	collision_polygon.build_mode = CollisionPolygon2D.BUILD_SOLIDS
-	# Simplify polygon before decomposition to reduce complexity
-	var simplified_polygon = simplify_polygon(local_polygon)
 	# Use convex decomposition to break complex concave shapes into stable convex pieces
-	# This prevents physics twitching and disappearing objects
-	var convex_polygons = Geometry2D.decompose_polygon_in_convex(simplified_polygon)
-	# Limit the number of convex pieces to prevent over-complexity (max 8 pieces)
-	if convex_polygons.size() > 8:
-		# Too complex - use simplified collision as single piece
-		collision_polygon.polygon = simplified_polygon
+	var convex_polygons = Geometry2D.decompose_polygon_in_convex(local_polygon)
+	# Allow more pieces for smooth circular shapes
+	if convex_polygons.size() > 24:
+		# Too complex - use original polygon as single piece
+		collision_polygon.polygon = local_polygon
 		physics_body.add_child(collision_polygon)
 	elif convex_polygons.size() > 1:
 		# If decomposition produced multiple convex shapes, use them
