@@ -971,56 +971,143 @@ func merge_polygon_into_bodies(polygon: PackedVector2Array, bodies: Array) -> vo
 	if bodies.size() == 0:
 		return
 	
-	# For now, merge into the first body (simple case)
-	# TODO: Handle merging multiple bodies together
+	print("=== MERGE START: %d bodies to merge ===" % bodies.size())
+	
+	# If multiple bodies, merge them all together into the first one
 	var target_body = bodies[0]
 	
 	if not is_instance_valid(target_body):
+		print("ERROR: Target body is invalid")
 		return
 	
-	# Find the Polygon2D and CollisionPolygon2D in the target body
-	var visual_polygon: Polygon2D = null
-	var collision_polygon: CollisionPolygon2D = null
+	print("Target body: %s" % target_body)
 	
+	# Find the Polygon2D in the target body
+	var target_visual: Polygon2D = null
 	for child in target_body.get_children():
 		if child is Polygon2D:
-			visual_polygon = child
-		elif child is CollisionPolygon2D:
-			collision_polygon = child
+			target_visual = child
+			break
 	
-	if visual_polygon == null or collision_polygon == null:
-		print("Warning: Target body missing Polygon2D or CollisionPolygon2D")
+	if target_visual == null:
+		print("Warning: Target body missing Polygon2D")
 		return
 	
-	# Convert new polygon to target body's local space
+	# Start with the target body's polygon
+	var merged_polygon = target_visual.polygon
+	print("Starting with target polygon: %d vertices" % merged_polygon.size())
+	
+	# First, merge the new drawn polygon with the target body
 	var local_polygon = PackedVector2Array()
 	for point in polygon:
 		local_polygon.append(target_body.to_local(point))
 	
-	# Merge the polygons
-	var current_body_polygon = visual_polygon.polygon
-	var merged = Geometry2D.merge_polygons(current_body_polygon, local_polygon)
+	print("Merging new drawn polygon: %d vertices" % local_polygon.size())
+	var initial_merge = Geometry2D.merge_polygons(merged_polygon, local_polygon)
+	print("Initial merge result: %d polygons" % initial_merge.size())
 	
-	if merged.size() > 0:
-		var new_polygon = merged[0]
+	if initial_merge.size() > 0:
+		merged_polygon = initial_merge[0]
+		print("Merged polygon now has: %d vertices" % merged_polygon.size())
+	
+	# Now try to merge additional bodies into the expanded target (if any)
+	for i in range(1, bodies.size()):
+		var other_body = bodies[i]
+		print("Processing body %d: %s" % [i, other_body])
 		
-		# Update visual and collision polygons
-		visual_polygon.polygon = new_polygon
-		collision_polygon.polygon = new_polygon
+		if not is_instance_valid(other_body):
+			print("  - Body %d is invalid, skipping" % i)
+			continue
 		
-		# Update mass if it's a RigidBody2D
-		if target_body is RigidBody2D:
-			var area = calculate_polygon_area(new_polygon)
-			var density = 1.0
-			if current_polygon_material != null:
-				density = current_polygon_material.density
-			target_body.mass = max(1.0, area * density * 0.01)
-
-
-func convert_strokes_to_physics() -> void:
-	# Deprecated - old stroke-based system
-	# Kept for compatibility but does nothing
-	pass
+		# Find the polygon from the other body
+		var other_visual: Polygon2D = null
+		for child in other_body.get_children():
+			if child is Polygon2D:
+				other_visual = child
+				break
+		
+		if other_visual == null:
+			print("  - Body %d has no Polygon2D, skipping" % i)
+			continue
+		
+		print("  - Body %d polygon: %d vertices" % [i, other_visual.polygon.size()])
+		
+		# Convert other body's polygon to target body's local space
+		var other_polygon_global = PackedVector2Array()
+		for point in other_visual.polygon:
+			other_polygon_global.append(other_body.to_global(point))
+		
+		var other_polygon_local = PackedVector2Array()
+		for point in other_polygon_global:
+			other_polygon_local.append(target_body.to_local(point))
+		
+		# Merge the polygons
+		var merge_result = Geometry2D.merge_polygons(merged_polygon, other_polygon_local)
+		print("  - Merge result: %d polygons" % merge_result.size())
+		
+		# Only merge if result is a single polygon (sufficient overlap)
+		if merge_result.size() == 1:
+			merged_polygon = merge_result[0]
+			print("  - SUCCESS: Merged into single polygon with %d vertices" % merged_polygon.size())
+			
+			# Defer removal of the other body to avoid physics issues
+			print("  - Queuing body %d for deletion" % i)
+			other_body.call_deferred("queue_free")
+			if other_body in existing_drawn_bodies:
+				existing_drawn_bodies.erase(other_body)
+				print("  - Removed from existing_drawn_bodies")
+			if other_body in existing_static_bodies:
+				existing_static_bodies.erase(other_body)
+				print("  - Removed from existing_static_bodies")
+		else:
+			print("  - SKIPPED: Not enough overlap to merge (would create %d separate polygons)" % merge_result.size())
+	
+	# Update the target body with the final merged polygon
+	print("Final merged polygon: %d vertices" % merged_polygon.size())
+	
+	# Update visual polygon
+	target_visual.polygon = merged_polygon
+	
+	# Remove all existing collision polygons and recreate
+	for child in target_body.get_children():
+		if child is CollisionPolygon2D:
+			child.queue_free()
+	
+	# Create new collision polygons with convex decomposition
+	var convex_polygons = Geometry2D.decompose_polygon_in_convex(merged_polygon)
+	if convex_polygons.size() > 24:
+		var simple_collision = CollisionPolygon2D.new()
+		simple_collision.polygon = merged_polygon
+		simple_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
+		target_body.add_child(simple_collision)
+	elif convex_polygons.size() > 0:
+		for convex_poly in convex_polygons:
+			var convex_collision = CollisionPolygon2D.new()
+			convex_collision.polygon = convex_poly
+			convex_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
+			target_body.add_child(convex_collision)
+	else:
+		var fallback_collision = CollisionPolygon2D.new()
+		fallback_collision.polygon = merged_polygon
+		fallback_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
+		target_body.add_child(fallback_collision)
+	
+	# Update debug Line2D if it exists
+	for child in target_body.get_children():
+		if child is Line2D and child.default_color == Color(1.0, 0.0, 0.0, 1.0):
+			child.clear_points()
+			for point in merged_polygon:
+				child.add_point(point)
+			child.add_point(merged_polygon[0])
+			break
+	
+	# Update mass if it's a RigidBody2D
+	if target_body is RigidBody2D:
+		var area = calculate_polygon_area(merged_polygon)
+		target_body.mass = max(5.0, area * 0.02)
+		print("Updated mass: %f" % target_body.mass)
+	
+	print("=== MERGE COMPLETE ===")
 
 
 func create_collision_shape_for_brush(brush_shape: String, brush_scale: float = 1.0) -> Shape2D:
