@@ -41,6 +41,8 @@ var is_eraser_tool_active: bool = false  # true when eraser tool is selected
 # Eraser state
 var current_eraser_polygon: PackedVector2Array = PackedVector2Array()  # Current eraser polygon
 var is_currently_erasing: bool = false
+var eraser_throttle_timer: float = 0.0  # Throttle eraser to prevent physics spam
+const ERASER_THROTTLE_MS: float = 16.0  # Minimum ms between eraser operations (~60 FPS)
 
 # Brush shape state
 var current_brush_shape: String = "circle"  # "circle" or "square"
@@ -456,12 +458,19 @@ func process_eraser_polygon(cursor: Node, is_action_pressed: bool) -> void:
 		if not is_currently_erasing:
 			is_currently_erasing = true
 			last_draw_position = draw_pos
+			eraser_throttle_timer = 0.0  # Reset throttle on new erase
+		
+		# Throttle eraser to prevent physics spam
+		var current_time = Time.get_ticks_msec()
+		if current_time - eraser_throttle_timer < ERASER_THROTTLE_MS:
+			return  # Too soon, skip this frame
 		
 		# Apply eraser at current position
 		var distance = last_draw_position.distance_to(draw_pos)
 		if distance >= MIN_DRAW_DISTANCE:
 			erase_at_point_polygon(draw_pos)
 			last_draw_position = draw_pos
+			eraser_throttle_timer = current_time
 	else:
 		if is_currently_erasing:
 			is_currently_erasing = false
@@ -492,6 +501,8 @@ func erase_at_point_polygon(erase_pos: Vector2) -> void:
 
 func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> void:
 	"""Clips the erase brush from the body's polygon"""
+	var start_time = Time.get_ticks_msec()
+	
 	# Find the Polygon2D and CollisionPolygon2D
 	var visual_polygon: Polygon2D = null
 	var collision_polygon: CollisionPolygon2D = null
@@ -505,26 +516,46 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 	if visual_polygon == null or collision_polygon == null:
 		return
 	
+	var original_vertices = visual_polygon.polygon.size()
+	var original_area = calculate_polygon_area(visual_polygon.polygon)
+	print("=== ERASE START ===")
+	print("Original polygon: %d vertices, area: %.2f" % [original_vertices, original_area])
+	
 	# Convert erase brush to body's local space
 	var local_erase_brush = PackedVector2Array()
 	for point in erase_brush:
 		local_erase_brush.append(body.to_local(point))
 	
+	print("Erase brush: %d vertices" % erase_brush.size())
+	
 	# Clip the erase brush from the body's polygon
+	var clip_start = Time.get_ticks_msec()
 	var current_polygon = visual_polygon.polygon
 	var clipped = Geometry2D.clip_polygons(current_polygon, local_erase_brush)
+	var clip_time = Time.get_ticks_msec() - clip_start
+	
+	print("Clip operation: %d ms, resulted in %d polygons" % [clip_time, clipped.size()])
 	
 	if clipped.size() == 0:
 		# Entire body was erased
+		print("Body completely erased")
 		body.queue_free()
 		if body in existing_drawn_bodies:
 			existing_drawn_bodies.erase(body)
 		if body in existing_static_bodies:
 			existing_static_bodies.erase(body)
+		print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
 	elif clipped.size() == 1:
 		# Single polygon remains - update it
 		var new_polygon = clipped[0]
+		print("Single polygon remains: %d vertices" % new_polygon.size())
+		
 		if new_polygon.size() >= 3:
+			# Simplify polygon to prevent vertex accumulation
+			if new_polygon.size() > 50:
+				new_polygon = simplify_polygon(new_polygon)
+				print("Simplified to %d vertices" % new_polygon.size())
+			
 			# Keep polygon as-is without recentering
 			visual_polygon.polygon = new_polygon
 			
@@ -534,7 +565,11 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 					child.queue_free()
 			
 			# Create collision polygons with convex decomposition (no simplification for smooth shapes)
+			var decompose_start = Time.get_ticks_msec()
 			var convex_polygons = Geometry2D.decompose_polygon_in_convex(new_polygon)
+			var decompose_time = Time.get_ticks_msec() - decompose_start
+			print("Convex decomposition: %d ms, created %d pieces" % [decompose_time, convex_polygons.size()])
+			
 			# Allow more pieces for smooth circular shapes
 			if convex_polygons.size() > 24:
 				# Too complex - use original polygon as single piece
@@ -568,21 +603,28 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 			if body is RigidBody2D:
 				var area = calculate_polygon_area(new_polygon)
 				body.mass = max(5.0, area * 0.02)  # Use updated mass parameters
+			
+			print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
 		else:
 			# Polygon too small, remove body
+			print("Resulting polygon too small, removing body")
 			body.queue_free()
 			if body in existing_drawn_bodies:
 				existing_drawn_bodies.erase(body)
 			if body in existing_static_bodies:
 				existing_static_bodies.erase(body)
+			print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
 	else:
 		# Multiple polygons remain - keep first in original body, create new bodies for others
+		print("Split into %d polygons" % clipped.size())
+		
 		# Get properties from original body
 		var body_layer = body.get_meta("layer", 1)
 		var body_material = visual_polygon.material
 		var is_static = body is StaticBody2D
 		
 		# Sort polygons by area (largest first)
+		var sort_start = Time.get_ticks_msec()
 		var polygon_data = []
 		for poly in clipped:
 			if poly.size() >= 3:
@@ -592,11 +634,28 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 					polygon_data.append({"polygon": poly, "area": area})
 		
 		polygon_data.sort_custom(func(a, b): return a["area"] > b["area"])
+		var sort_time = Time.get_ticks_msec() - sort_start
+		print("Sorting %d valid pieces: %d ms" % [polygon_data.size(), sort_time])
 		
 		if polygon_data.size() > 0:
-			# Keep largest piece in original body without recentering
+			# Keep largest piece in original body without recentering (to preserve position)
 			var largest = polygon_data[0]
-			visual_polygon.polygon = largest["polygon"]
+			print("Largest piece: %d vertices, area: %.2f" % [largest["polygon"].size(), largest["area"]])
+			
+			# Simplify if too complex
+			var largest_poly = largest["polygon"]
+			if largest_poly.size() > 50:
+				largest_poly = simplify_polygon(largest_poly)
+				print("Simplified largest to %d vertices" % largest_poly.size())
+			
+			visual_polygon.polygon = largest_poly
+			
+			# Calculate and set center of mass explicitly (without recentering)
+			if body is RigidBody2D:
+				var centroid = calculate_polygon_centroid(largest_poly)
+				body.center_of_mass_mode = RigidBody2D.CENTER_OF_MASS_MODE_CUSTOM
+				body.center_of_mass = centroid
+				print("Set center of mass to (%.2f, %.2f)" % [centroid.x, centroid.y])
 			
 			# Remove all existing collision polygons and recreate with convex decomposition
 			for child in body.get_children():
@@ -604,12 +663,16 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 					child.queue_free()
 			
 			# Create collision polygons with convex decomposition (no simplification for smooth shapes)
-			var convex_polygons = Geometry2D.decompose_polygon_in_convex(largest["polygon"])
+			var decompose_start = Time.get_ticks_msec()
+			var convex_polygons = Geometry2D.decompose_polygon_in_convex(largest_poly)
+			var decompose_time = Time.get_ticks_msec() - decompose_start
+			print("Largest piece convex decomposition: %d ms, created %d pieces" % [decompose_time, convex_polygons.size()])
+			
 			# Allow more pieces for smooth circular shapes
 			if convex_polygons.size() > 24:
 				# Too complex - use original polygon as single piece
 				var simple_collision = CollisionPolygon2D.new()
-				simple_collision.polygon = largest["polygon"]
+				simple_collision.polygon = largest_poly
 				simple_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
 				body.add_child(simple_collision)
 			elif convex_polygons.size() > 0:
@@ -621,7 +684,7 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 			else:
 				# Fallback to original polygon if decomposition fails
 				var fallback_collision = CollisionPolygon2D.new()
-				fallback_collision.polygon = largest["polygon"]
+				fallback_collision.polygon = largest_poly
 				fallback_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
 				body.add_child(fallback_collision)
 			
@@ -629,19 +692,21 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 			for child in body.get_children():
 				if child is Line2D and child.default_color == Color(1.0, 0.0, 0.0, 1.0):
 					child.clear_points()
-					for point in largest["polygon"]:
+					for point in largest_poly:
 						child.add_point(point)
-					child.add_point(largest["polygon"][0])  # Close the shape
+					child.add_point(largest_poly[0])  # Close the shape
 					break
 			
 			# Update mass if it's a RigidBody2D
 			if body is RigidBody2D:
-				var area = calculate_polygon_area(largest["polygon"])
+				var area = calculate_polygon_area(largest_poly)
 				body.mass = max(5.0, area * 0.02)  # Use updated mass parameters
 			
 			# Create new bodies for remaining pieces
+			var create_bodies_start = Time.get_ticks_msec()
 			for i in range(1, polygon_data.size()):
 				var piece_polygon = polygon_data[i]["polygon"]
+				print("Creating body for piece %d: %d vertices, area: %.2f" % [i, piece_polygon.size(), polygon_data[i]["area"]])
 				
 				# Convert to world space
 				var world_polygon = PackedVector2Array()
@@ -658,13 +723,18 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 					piece_material.density = body.mass / max(0.1, calculate_polygon_area(visual_polygon.polygon))
 				
 				create_physics_body_from_polygon(world_polygon, piece_material, body_material, is_static, body_layer)
+			var create_bodies_time = Time.get_ticks_msec() - create_bodies_start
+			print("Creating %d new bodies: %d ms" % [polygon_data.size() - 1, create_bodies_time])
+			print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
 		else:
 			# All pieces too small, remove body
+			print("All pieces too small, removing body")
 			body.queue_free()
 			if body in existing_drawn_bodies:
 				existing_drawn_bodies.erase(body)
 			if body in existing_static_bodies:
 				existing_static_bodies.erase(body)
+			print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
 
 
 func start_new_polygon_preview() -> void:
@@ -964,6 +1034,33 @@ func calculate_polygon_area(polygon: PackedVector2Array) -> float:
 		area -= polygon[j].x * polygon[i].y
 	
 	return abs(area) / 2.0
+
+
+func calculate_polygon_centroid(polygon: PackedVector2Array) -> Vector2:
+	"""Calculates the centroid (center of mass) of a polygon"""
+	if polygon.size() < 3:
+		return Vector2.ZERO
+	
+	var centroid = Vector2.ZERO
+	var area = 0.0
+	var n = polygon.size()
+	
+	for i in range(n):
+		var j = (i + 1) % n
+		var cross = polygon[i].x * polygon[j].y - polygon[j].x * polygon[i].y
+		centroid.x += (polygon[i].x + polygon[j].x) * cross
+		centroid.y += (polygon[i].y + polygon[j].y) * cross
+		area += cross
+	
+	area *= 0.5
+	if abs(area) < 0.001:
+		# Fallback to simple average if area is too small
+		for point in polygon:
+			centroid += point
+		return centroid / polygon.size()
+	
+	centroid /= (6.0 * area)
+	return centroid
 
 
 func merge_polygon_into_bodies(polygon: PackedVector2Array, bodies: Array) -> void:
