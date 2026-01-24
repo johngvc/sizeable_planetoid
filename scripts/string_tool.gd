@@ -146,7 +146,7 @@ func _cleanup_invalid_ropes() -> void:
 
 
 func _is_rope_overstretched(string_data: Dictionary) -> bool:
-	"""Check if rope is stretched beyond 10% of its original length"""
+	"""Check if rope is stretched beyond threshold (only breaks on tension, not compression)"""
 	var body_a = string_data.body_a
 	var body_b = string_data.body_b
 	
@@ -156,10 +156,31 @@ func _is_rope_overstretched(string_data: Dictionary) -> bool:
 	var pos_a = body_a.to_global(string_data.attach_local_a)
 	var pos_b = body_b.to_global(string_data.attach_local_b)
 	var current_distance = pos_a.distance_to(pos_b)
-	var max_length = string_data.max_length
-	var snap_threshold = max_length * 1.50  # 50% stretch
+	var initial_distance = string_data.max_length
 	
-	return current_distance > snap_threshold
+	# Only snap if distance INCREASES beyond threshold (tension, not compression)
+	# The rope has slack (1.1x), so allow stretching beyond initial distance
+	# Snap at 50% beyond the initial constraint distance
+	var snap_threshold = initial_distance * 1.50
+	
+	# Debug logging
+	var distance_change = current_distance - initial_distance
+	var distance_change_percent = (distance_change / initial_distance) * 100.0
+	
+	print("📏 Rope distance check:")
+	print("   Initial distance: %.1f" % initial_distance)
+	print("   Current distance: %.1f" % current_distance)
+	print("   Distance change: %.1f (%.1f%%)" % [distance_change, distance_change_percent])
+	print("   Snap threshold: %.1f" % snap_threshold)
+	print("   Stretched beyond initial: %s" % (current_distance > initial_distance))
+	print("   Beyond snap threshold: %s" % (current_distance > snap_threshold))
+	
+	# Only break if current distance is greater than initial AND greater than snap threshold
+	var should_snap = current_distance > initial_distance and current_distance > snap_threshold
+	if should_snap:
+		print("💥 ROPE WILL SNAP!")
+	
+	return should_snap
 
 
 func _is_attachment_point_valid(body: PhysicsBody2D, local_pos: Vector2) -> bool:
@@ -167,18 +188,47 @@ func _is_attachment_point_valid(body: PhysicsBody2D, local_pos: Vector2) -> bool
 	if not is_instance_valid(body):
 		return false
 	
+	# Check if the body still has any collision shapes
+	# If the body exists but all its collision was erased, it would have no shapes
+	var shape_count = body.get_child_count()
+	var has_collision = false
+	for i in range(shape_count):
+		var child = body.get_child(i)
+		if child is CollisionShape2D or child is CollisionPolygon2D:
+			has_collision = true
+			break
+	
+	if not has_collision:
+		return false
+	
+	# Do a more forgiving spatial check - check if the attachment point is within
+	# a reasonable distance of the body's collision boundaries
 	var world_pos = body.to_global(local_pos)
 	var space_state = get_world_2d().direct_space_state
 	var query = PhysicsPointQueryParameters2D.new()
 	query.position = world_pos
 	query.collide_with_bodies = true
 	query.collide_with_areas = false
+	query.collision_mask = 0xFFFFFFFF  # Check all layers
 	
 	# Query for bodies at this point
-	var results = space_state.intersect_point(query, 1)
+	var results = space_state.intersect_point(query, 5)  # Check up to 5 nearby bodies
 	
 	# Check if the attachment point still intersects with the original body
 	for result in results:
+		if result.collider == body:
+			return true
+	
+	# If point query failed, do a shape query with small radius as fallback
+	var shape_query = PhysicsShapeQueryParameters2D.new()
+	var circle = CircleShape2D.new()
+	circle.radius = 5.0  # Small tolerance radius
+	shape_query.shape = circle
+	shape_query.transform = Transform2D(0, world_pos)
+	shape_query.collision_mask = 0xFFFFFFFF
+	
+	var shape_results = space_state.intersect_shape(shape_query, 5)
+	for result in shape_results:
 		if result.collider == body:
 			return true
 	
@@ -486,8 +536,8 @@ func find_body_at_position(position: Vector2) -> PhysicsBody2D:
 	query.shape = shape
 	query.transform = Transform2D(0, position)
 	
-	# Check both layers (mask bits 0 and 1)
-	query.collision_mask = (1 << 0) | (1 << 1)
+	# Check all collision layers (enable all 32 bits)
+	query.collision_mask = 0xFFFFFFFF
 	
 	var results = space_state.intersect_shape(query, 32)
 	
