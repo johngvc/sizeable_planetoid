@@ -53,7 +53,7 @@ func _physics_process(delta: float) -> void:
 
 
 func _apply_rope_constraint(string_data: Dictionary, _delta: float) -> void:
-	"""Apply rope constraint - only prevents stretching beyond max_length"""
+	"""Apply rope constraint - only prevents stretching beyond max_length, allows free rotation"""
 	var body_a: PhysicsBody2D = string_data.body_a
 	var body_b: PhysicsBody2D = string_data.body_b
 	var max_length: float = string_data.max_length
@@ -61,9 +61,11 @@ func _apply_rope_constraint(string_data: Dictionary, _delta: float) -> void:
 	if not is_instance_valid(body_a) or not is_instance_valid(body_b):
 		return
 	
-	# Get current attachment positions
-	var global_a = body_a.to_global(string_data.attach_local_a)
-	var global_b = body_b.to_global(string_data.attach_local_b)
+	# Get current attachment positions in world space
+	var local_a: Vector2 = string_data.attach_local_a
+	var local_b: Vector2 = string_data.attach_local_b
+	var global_a = body_a.to_global(local_a)
+	var global_b = body_b.to_global(local_b)
 	
 	# Calculate current distance
 	var delta_pos = global_b - global_a
@@ -84,43 +86,55 @@ func _apply_rope_constraint(string_data: Dictionary, _delta: float) -> void:
 	if not a_is_dynamic and not b_is_dynamic:
 		return  # Both static, nothing to do
 	
-	# Calculate correction
-	var correction = direction * excess * CONSTRAINT_STIFFNESS
+	# Use impulse-based constraint for proper physics integration
+	# Apply impulses at the attachment points to allow natural rotation
+	var constraint_force = excess * 500.0  # Strong constraint force
 	
 	if a_is_dynamic and b_is_dynamic:
-		# Both dynamic - split the correction based on mass
-		var total_mass = body_a.mass + body_b.mass
-		var ratio_a = body_b.mass / total_mass
-		var ratio_b = body_a.mass / total_mass
+		# Both dynamic - split based on inverse mass
+		var total_inv_mass = (1.0 / body_a.mass) + (1.0 / body_b.mass)
+		var ratio_a = (1.0 / body_a.mass) / total_inv_mass
+		var ratio_b = (1.0 / body_b.mass) / total_inv_mass
 		
-		# Move bodies toward each other
-		body_a.global_position += correction * ratio_a
-		body_b.global_position -= correction * ratio_b
-		
-		# Also adjust velocities to prevent further separation
-		var relative_vel = body_b.linear_velocity - body_a.linear_velocity
+		# Calculate impulse to stop separation
+		var relative_vel = _get_point_velocity(body_b, global_b) - _get_point_velocity(body_a, global_a)
 		var vel_along_rope = relative_vel.dot(direction)
 		
-		if vel_along_rope > 0:  # Moving apart
-			var impulse = direction * vel_along_rope * CONSTRAINT_STIFFNESS
-			body_a.linear_velocity += impulse * ratio_a
-			body_b.linear_velocity -= impulse * ratio_b
+		# Impulse to correct position and velocity
+		var impulse_magnitude = constraint_force + max(0, vel_along_rope) * 50.0
+		var impulse = direction * impulse_magnitude
+		
+		# Apply impulses at attachment points (this creates proper torque for rotation)
+		body_a.apply_impulse(impulse * ratio_a, global_a - body_a.global_position)
+		body_b.apply_impulse(-impulse * ratio_b, global_b - body_b.global_position)
+		
 	elif a_is_dynamic:
-		# Only A is dynamic - move A toward B
-		body_a.global_position += correction
+		# Only A is dynamic - apply impulse to A toward B
+		var point_vel = _get_point_velocity(body_a, global_a)
+		var vel_along_rope = point_vel.dot(-direction)
 		
-		# Adjust velocity
-		var vel_along_rope = body_a.linear_velocity.dot(-direction)
-		if vel_along_rope < 0:  # Moving away from B
-			body_a.linear_velocity -= direction * vel_along_rope * CONSTRAINT_STIFFNESS
+		var impulse_magnitude = constraint_force + max(0, -vel_along_rope) * 50.0
+		var impulse = direction * impulse_magnitude
+		
+		body_a.apply_impulse(impulse, global_a - body_a.global_position)
 	else:
-		# Only B is dynamic - move B toward A
-		body_b.global_position -= correction
+		# Only B is dynamic - apply impulse to B toward A
+		var point_vel = _get_point_velocity(body_b, global_b)
+		var vel_along_rope = point_vel.dot(direction)
 		
-		# Adjust velocity
-		var vel_along_rope = body_b.linear_velocity.dot(direction)
-		if vel_along_rope > 0:  # Moving away from A
-			body_b.linear_velocity -= direction * vel_along_rope * CONSTRAINT_STIFFNESS
+		var impulse_magnitude = constraint_force + max(0, vel_along_rope) * 50.0
+		var impulse = -direction * impulse_magnitude
+		
+		body_b.apply_impulse(impulse, global_b - body_b.global_position)
+
+
+func _get_point_velocity(body: RigidBody2D, world_point: Vector2) -> Vector2:
+	"""Get the velocity of a point on a rigid body (includes angular velocity contribution)"""
+	var offset = world_point - body.global_position
+	# Velocity at point = linear_velocity + angular_velocity × offset
+	# In 2D: angular velocity is scalar, cross product gives perpendicular vector
+	var angular_contribution = Vector2(-offset.y, offset.x) * body.angular_velocity
+	return body.linear_velocity + angular_contribution
 
 
 func _update_string_visual(string_data: Dictionary) -> void:
