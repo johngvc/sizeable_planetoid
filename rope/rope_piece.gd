@@ -2,9 +2,9 @@ extends RigidBody2D
 
 class_name RopePiece
 
-var wind_velocity: Vector2 = Vector2(0, 0)
 var location_target: Vector2 = Vector2.INF
 var push_rope: bool = false
+var enable_mouse_force: bool = false  # Control whether mouse force is applied
 
 var log_on = false
 
@@ -48,7 +48,7 @@ func update_relocation() -> bool:
 
 
 func get_mouse_vector() -> Vector2:
-	if not Input.is_action_pressed("ui_up"):
+	if not enable_mouse_force or not Input.is_action_pressed("ui_up"):
 		return Vector2.ZERO
 
 	return (get_global_mouse_position() - position).normalized()
@@ -56,5 +56,4 @@ func get_mouse_vector() -> Vector2:
 
 func _integrate_forces(state: PhysicsDirectBodyState2D) -> void:
 	update_relocation()
-	state.apply_force(wind_velocity * 80)
 	state.apply_force(get_mouse_vector() * 5000)

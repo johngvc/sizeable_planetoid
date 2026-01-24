@@ -381,10 +381,12 @@ func create_string(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2
 	anchor_a.freeze = is_paused  # Freeze if paused
 	anchor_a.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC if is_paused else RigidBody2D.FREEZE_MODE_KINEMATIC
 	anchor_a.mass = recommended_segment_mass
+	anchor_a.gravity_scale = 0.0  # No gravity
 	anchor_a.linear_damp = 5.0
 	anchor_a.angular_damp = 5.0
 	anchor_a.collision_layer = 0  # No collisions
 	anchor_a.collision_mask = 0
+	anchor_a.enable_mouse_force = false  # Prevent cursor attraction
 	anchor_a.process_mode = Node.PROCESS_MODE_PAUSABLE  # Stop on pause
 	add_child(anchor_a)
 	if is_paused:
@@ -397,10 +399,12 @@ func create_string(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2
 	anchor_b.freeze = is_paused  # Freeze if paused
 	anchor_b.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC if is_paused else RigidBody2D.FREEZE_MODE_KINEMATIC
 	anchor_b.mass = recommended_segment_mass
+	anchor_b.gravity_scale = 0.0  # No gravity
 	anchor_b.linear_damp = 5.0
 	anchor_b.angular_damp = 5.0
 	anchor_b.collision_layer = 0  # No collisions
 	anchor_b.collision_mask = 0
+	anchor_b.enable_mouse_force = false  # Prevent cursor attraction
 	anchor_b.process_mode = Node.PROCESS_MODE_PAUSABLE  # Stop on pause
 	add_child(anchor_b)
 	if is_paused:
@@ -509,6 +513,10 @@ func _adjust_rope_segment_masses(rope: Rope, target_mass: float, freeze_if_pause
 			walker.mass = target_mass
 			walker.linear_damp = max(walker.linear_damp, 2.0)
 			walker.angular_damp = max(walker.angular_damp, 4.0)
+			
+			# Disable the mouse force behavior (prevents rope being pulled to cursor)
+			if "enable_mouse_force" in walker:
+				walker.enable_mouse_force = false
 			
 			# Freeze if physics is paused
 			if freeze_if_paused:
