@@ -111,7 +111,7 @@ func _physics_process(_delta: float) -> void:
 
 
 func _cleanup_invalid_ropes() -> void:
-	"""Remove ropes whose connected bodies or attachment points have been deleted"""
+	"""Remove ropes whose connected bodies or attachment points have been deleted, or that are over-stretched"""
 	var ropes_to_remove = []
 	
 	for i in range(placed_strings.size()):
@@ -131,6 +131,10 @@ func _cleanup_invalid_ropes() -> void:
 		elif not _is_attachment_point_valid(body_b, string_data.attach_local_b):
 			print("🗑️ Rope attachment point B erased - cleaning up rope")
 			should_delete = true
+		# Check if rope is over-stretched (more than 10% beyond max length)
+		elif _is_rope_overstretched(string_data):
+			print("💥 Rope snapped from over-stretching - cleaning up rope")
+			should_delete = true
 		
 		if should_delete:
 			_delete_rope(string_data)
@@ -139,6 +143,23 @@ func _cleanup_invalid_ropes() -> void:
 	# Remove invalid ropes from the array (in reverse order to preserve indices)
 	for i in range(ropes_to_remove.size() - 1, -1, -1):
 		placed_strings.remove_at(ropes_to_remove[i])
+
+
+func _is_rope_overstretched(string_data: Dictionary) -> bool:
+	"""Check if rope is stretched beyond 10% of its original length"""
+	var body_a = string_data.body_a
+	var body_b = string_data.body_b
+	
+	if not is_instance_valid(body_a) or not is_instance_valid(body_b):
+		return false
+	
+	var pos_a = body_a.to_global(string_data.attach_local_a)
+	var pos_b = body_b.to_global(string_data.attach_local_b)
+	var current_distance = pos_a.distance_to(pos_b)
+	var max_length = string_data.max_length
+	var snap_threshold = max_length * 1.50  # 50% stretch
+	
+	return current_distance > snap_threshold
 
 
 func _is_attachment_point_valid(body: PhysicsBody2D, local_pos: Vector2) -> bool:
