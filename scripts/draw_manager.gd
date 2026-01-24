@@ -2,11 +2,13 @@ extends Node2D
 ## Manages drawing objects with the cursor and converting them to physics objects
 ## Uses LittleBigPlanet-style polygon Boolean operations (merge_polygons, clip_polygons)
 ## Polygons stored as PackedVector2Array and converted to RigidBody2D with Polygon2D and CollisionPolygon2D
+## Supports multi-material bodies where each region retains its own physics properties
 
 const DRAW_SIZE: float = 16.0  # Size/width of the brush stroke (radius for circle, half-size for square)
 const MIN_DRAW_DISTANCE: float = 4.0  # Distance threshold before applying merge (5% of brush diameter)
 const MERGE_DISTANCE: float = 12.0  # Distance threshold for merging objects (deprecated - will use polygon overlap instead)
 const MIN_POLYGON_AREA: float = 100.0  # Minimum area (in pixels²) for a polygon to be kept - filters out tiny fragments
+const MIN_REGION_AREA: float = 50.0  # Minimum area for a material region to be kept
 
 # Shader for world-space UV mapping
 var world_uv_shader: Shader = null
@@ -500,43 +502,46 @@ func erase_at_point_polygon(erase_pos: Vector2) -> void:
 
 
 func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> void:
-	"""Clips the erase brush from the body's polygon"""
-	var start_time = Time.get_ticks_msec()
+	"""
+	Clips the erase brush from the body's polygon.
+	Now supports multi-material regions - erases from all regions while preserving material identity.
+	"""
+	# Get existing regions from the body
+	var regions = get_body_regions(body)
 	
-	# Find the Polygon2D and CollisionPolygon2D
-	var visual_polygon: Polygon2D = null
-	var collision_polygon: CollisionPolygon2D = null
-	
-	for child in body.get_children():
-		if child is Polygon2D:
-			visual_polygon = child
-		elif child is CollisionPolygon2D:
-			collision_polygon = child
-	
-	if visual_polygon == null or collision_polygon == null:
+	if regions.size() == 0:
 		return
-	
-	var original_vertices = visual_polygon.polygon.size()
-	var original_area = calculate_polygon_area(visual_polygon.polygon)
-	print("=== ERASE START ===")
-	print("Original polygon: %d vertices, area: %.2f" % [original_vertices, original_area])
 	
 	# Convert erase brush to body's local space
 	var local_erase_brush = PackedVector2Array()
 	for point in erase_brush:
 		local_erase_brush.append(body.to_local(point))
 	
-	print("Erase brush: %d vertices" % erase_brush.size())
+	# Early out: check if eraser intersects with any region
+	var has_intersection = false
+	for region in regions:
+		var intersection = Geometry2D.intersect_polygons(region.polygon, local_erase_brush)
+		if intersection.size() > 0:
+			has_intersection = true
+			break
 	
-	# Clip the erase brush from the body's polygon
-	var clip_start = Time.get_ticks_msec()
-	var current_polygon = visual_polygon.polygon
-	var clipped = Geometry2D.clip_polygons(current_polygon, local_erase_brush)
-	var clip_time = Time.get_ticks_msec() - clip_start
+	if not has_intersection:
+		# Eraser doesn't touch this body - skip processing entirely
+		return
 	
-	print("Clip operation: %d ms, resulted in %d polygons" % [clip_time, clipped.size()])
+	var start_time = Time.get_ticks_msec()
+	print("=== ERASE START ===")
+	print("Body has %d regions before erase" % regions.size())
 	
-	if clipped.size() == 0:
+	# Clip eraser from all regions
+	var updated_regions = clip_regions_with_eraser(regions, local_erase_brush)
+	print("Body has %d regions after erase" % updated_regions.size())
+	
+	# Get body properties
+	var body_layer = body.get_meta("layer", 1)
+	var is_static = body is StaticBody2D
+	
+	if updated_regions.size() == 0:
 		# Entire body was erased
 		print("Body completely erased")
 		body.queue_free()
@@ -545,196 +550,129 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 		if body in existing_static_bodies:
 			existing_static_bodies.erase(body)
 		print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
-	elif clipped.size() == 1:
-		# Single polygon remains - update it
-		var new_polygon = clipped[0]
-		print("Single polygon remains: %d vertices" % new_polygon.size())
-		
-		if new_polygon.size() >= 3:
-			# Simplify polygon to prevent vertex accumulation
-			if new_polygon.size() > 50:
-				new_polygon = simplify_polygon(new_polygon)
-				print("Simplified to %d vertices" % new_polygon.size())
-			
-			# Keep polygon as-is without recentering
-			visual_polygon.polygon = new_polygon
-			
-			# Remove all existing collision polygons and recreate with convex decomposition
-			for child in body.get_children():
-				if child is CollisionPolygon2D:
-					child.queue_free()
-			
-			# Create collision polygons with convex decomposition (no simplification for smooth shapes)
-			var decompose_start = Time.get_ticks_msec()
-			var convex_polygons = Geometry2D.decompose_polygon_in_convex(new_polygon)
-			var decompose_time = Time.get_ticks_msec() - decompose_start
-			print("Convex decomposition: %d ms, created %d pieces" % [decompose_time, convex_polygons.size()])
-			
-			# Allow more pieces for smooth circular shapes
-			if convex_polygons.size() > 24:
-				# Too complex - use original polygon as single piece
-				var simple_collision = CollisionPolygon2D.new()
-				simple_collision.polygon = new_polygon
-				simple_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
-				body.add_child(simple_collision)
-			elif convex_polygons.size() > 0:
-				for convex_poly in convex_polygons:
-					var convex_collision = CollisionPolygon2D.new()
-					convex_collision.polygon = convex_poly
-					convex_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
-					body.add_child(convex_collision)
-			else:
-				# Fallback to original polygon if decomposition fails
-				var fallback_collision = CollisionPolygon2D.new()
-				fallback_collision.polygon = new_polygon
-				fallback_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
-				body.add_child(fallback_collision)
-			
-			# Update debug Line2D if it exists
-			for child in body.get_children():
-				if child is Line2D and child.default_color == Color(1.0, 0.0, 0.0, 1.0):
-					child.clear_points()
-					for point in new_polygon:
-						child.add_point(point)
-					child.add_point(new_polygon[0])  # Close the shape
-					break
-			
-			# Update mass if it's a RigidBody2D
-			if body is RigidBody2D:
-				var area = calculate_polygon_area(new_polygon)
-				body.mass = max(5.0, area * 0.02)  # Use updated mass parameters
-			
-			print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
-		else:
-			# Polygon too small, remove body
-			print("Resulting polygon too small, removing body")
-			body.queue_free()
-			if body in existing_drawn_bodies:
-				existing_drawn_bodies.erase(body)
-			if body in existing_static_bodies:
-				existing_static_bodies.erase(body)
-			print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
+		return
+	
+	# Check if regions are still contiguous (connected)
+	var contiguous_groups = check_regions_contiguous(updated_regions)
+	print("Found %d contiguous groups" % contiguous_groups.size())
+	
+	if contiguous_groups.size() == 1:
+		# All regions still connected - update this body
+		set_body_regions(body, updated_regions)
+		rebuild_body_visuals_and_collisions(body, updated_regions, body_layer)
+		print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
 	else:
-		# Multiple polygons remain - keep first in original body, create new bodies for others
-		print("Split into %d polygons" % clipped.size())
+		# Regions split into multiple disconnected groups - need to create separate bodies
+		print("Splitting into %d separate bodies" % contiguous_groups.size())
 		
-		# Get properties from original body
-		var body_layer = body.get_meta("layer", 1)
-		var body_material = visual_polygon.material
-		var is_static = body is StaticBody2D
+		# Sort groups by total area (largest first)
+		var group_data: Array = []
+		for group in contiguous_groups:
+			var total_area = 0.0
+			for region in group:
+				total_area += region.get_area()
+			group_data.append({"regions": group, "area": total_area})
 		
-		# Sort polygons by area (largest first)
-		var sort_start = Time.get_ticks_msec()
-		var polygon_data = []
-		for poly in clipped:
-			if poly.size() >= 3:
-				var area = calculate_polygon_area(poly)
-				# Only keep polygons that meet minimum area threshold
-				if area >= MIN_POLYGON_AREA:
-					polygon_data.append({"polygon": poly, "area": area})
+		group_data.sort_custom(func(a, b): return a["area"] > b["area"])
 		
-		polygon_data.sort_custom(func(a, b): return a["area"] > b["area"])
-		var sort_time = Time.get_ticks_msec() - sort_start
-		print("Sorting %d valid pieces: %d ms" % [polygon_data.size(), sort_time])
-		
-		if polygon_data.size() > 0:
-			# Keep largest piece in original body without recentering (to preserve position)
-			var largest = polygon_data[0]
-			print("Largest piece: %d vertices, area: %.2f" % [largest["polygon"].size(), largest["area"]])
+		# Keep largest group in original body
+		if group_data.size() > 0:
+			var largest_group = group_data[0]["regions"]
+			set_body_regions(body, largest_group)
+			rebuild_body_visuals_and_collisions(body, largest_group, body_layer)
 			
-			# Simplify if too complex
-			var largest_poly = largest["polygon"]
-			if largest_poly.size() > 50:
-				largest_poly = simplify_polygon(largest_poly)
-				print("Simplified largest to %d vertices" % largest_poly.size())
-			
-			visual_polygon.polygon = largest_poly
-			
-			# Calculate and set center of mass explicitly (without recentering)
-			if body is RigidBody2D:
-				var centroid = calculate_polygon_centroid(largest_poly)
-				body.center_of_mass_mode = RigidBody2D.CENTER_OF_MASS_MODE_CUSTOM
-				body.center_of_mass = centroid
-				print("Set center of mass to (%.2f, %.2f)" % [centroid.x, centroid.y])
-			
-			# Remove all existing collision polygons and recreate with convex decomposition
-			for child in body.get_children():
-				if child is CollisionPolygon2D:
-					child.queue_free()
-			
-			# Create collision polygons with convex decomposition (no simplification for smooth shapes)
-			var decompose_start = Time.get_ticks_msec()
-			var convex_polygons = Geometry2D.decompose_polygon_in_convex(largest_poly)
-			var decompose_time = Time.get_ticks_msec() - decompose_start
-			print("Largest piece convex decomposition: %d ms, created %d pieces" % [decompose_time, convex_polygons.size()])
-			
-			# Allow more pieces for smooth circular shapes
-			if convex_polygons.size() > 24:
-				# Too complex - use original polygon as single piece
-				var simple_collision = CollisionPolygon2D.new()
-				simple_collision.polygon = largest_poly
-				simple_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
-				body.add_child(simple_collision)
-			elif convex_polygons.size() > 0:
-				for convex_poly in convex_polygons:
-					var convex_collision = CollisionPolygon2D.new()
-					convex_collision.polygon = convex_poly
-					convex_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
-					body.add_child(convex_collision)
-			else:
-				# Fallback to original polygon if decomposition fails
-				var fallback_collision = CollisionPolygon2D.new()
-				fallback_collision.polygon = largest_poly
-				fallback_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
-				body.add_child(fallback_collision)
-			
-			# Update debug Line2D if it exists
-			for child in body.get_children():
-				if child is Line2D and child.default_color == Color(1.0, 0.0, 0.0, 1.0):
-					child.clear_points()
-					for point in largest_poly:
-						child.add_point(point)
-					child.add_point(largest_poly[0])  # Close the shape
-					break
-			
-			# Update mass if it's a RigidBody2D
-			if body is RigidBody2D:
-				var area = calculate_polygon_area(largest_poly)
-				body.mass = max(5.0, area * 0.02)  # Use updated mass parameters
-			
-			# Create new bodies for remaining pieces
-			var create_bodies_start = Time.get_ticks_msec()
-			for i in range(1, polygon_data.size()):
-				var piece_polygon = polygon_data[i]["polygon"]
-				print("Creating body for piece %d: %d vertices, area: %.2f" % [i, piece_polygon.size(), polygon_data[i]["area"]])
+			# Create new bodies for remaining groups
+			for i in range(1, group_data.size()):
+				var group_regions = group_data[i]["regions"]
 				
-				# Convert to world space
-				var world_polygon = PackedVector2Array()
-				for point in piece_polygon:
-					world_polygon.append(body.to_global(point))
+				# Calculate combined polygon for the group to get world position
+				var combined = get_combined_polygon_from_regions(group_regions)
+				if combined.size() < 3:
+					continue
 				
-				# Extract material properties
-				var piece_material = null
-				if body is RigidBody2D and body.physics_material_override != null:
-					var phys_mat = body.physics_material_override
-					piece_material = DrawMaterial.new()
-					piece_material.friction = phys_mat.friction
-					piece_material.bounce = phys_mat.bounce
-					piece_material.density = body.mass / max(0.1, calculate_polygon_area(visual_polygon.polygon))
+				# Check if group meets minimum area threshold
+				var group_area = calculate_polygon_area(combined)
+				if group_area < MIN_POLYGON_AREA:
+					print("Skipping fragment group %d - too small (area: %.2f)" % [i, group_area])
+					continue
 				
-				create_physics_body_from_polygon(world_polygon, piece_material, body_material, is_static, body_layer)
-			var create_bodies_time = Time.get_ticks_msec() - create_bodies_start
-			print("Creating %d new bodies: %d ms" % [polygon_data.size() - 1, create_bodies_time])
-			print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
-		else:
-			# All pieces too small, remove body
-			print("All pieces too small, removing body")
-			body.queue_free()
-			if body in existing_drawn_bodies:
-				existing_drawn_bodies.erase(body)
-			if body in existing_static_bodies:
-				existing_static_bodies.erase(body)
-			print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
+				# Convert combined polygon to world space
+				var world_combined = PackedVector2Array()
+				for point in combined:
+					world_combined.append(body.to_global(point))
+				
+				# Calculate new center
+				var new_center = Vector2.ZERO
+				for point in world_combined:
+					new_center += point
+				new_center /= world_combined.size()
+				
+				# Create new physics body
+				var new_body: Node2D
+				if is_static:
+					new_body = StaticBody2D.new()
+				else:
+					new_body = RigidBody2D.new()
+					new_body.gravity_scale = 1.0
+					new_body.continuous_cd = RigidBody2D.CCD_MODE_CAST_SHAPE
+					new_body.linear_damp = 0.5
+					new_body.angular_damp = 2.0
+					new_body.can_sleep = true
+				
+				new_body.global_position = new_center
+				
+				# Set collision layers
+				if body_layer == 1:
+					new_body.collision_layer = 1 << LAYER_1_COLLISION_BIT
+					new_body.collision_mask = (1 << LAYER_1_COLLISION_BIT) | (1 << GROUND_COLLISION_BIT)
+				else:
+					new_body.collision_layer = 1 << LAYER_2_COLLISION_BIT
+					new_body.collision_mask = (1 << LAYER_2_COLLISION_BIT) | (1 << GROUND_COLLISION_BIT)
+				
+				new_body.set_meta("layer", body_layer)
+				
+				# Convert regions to new body's local space
+				var local_regions: Array = []
+				for region in group_regions:
+					var local_region = MaterialRegion.new()
+					var local_polygon = PackedVector2Array()
+					for point in region.polygon:
+						var world_point = body.to_global(point)
+						local_polygon.append(new_body.to_local(world_point))
+					local_region.polygon = local_polygon
+					local_region.material = region.material
+					local_region.shader_material = region.shader_material
+					local_region.update_convex_pieces()
+					local_regions.append(local_region)
+				
+				# Add debug line
+				var debug_line = Line2D.new()
+				debug_line.width = 2.0
+				debug_line.default_color = Color(1.0, 0.0, 0.0, 1.0)
+				debug_line.antialiased = true
+				new_body.add_child(debug_line)
+				
+				get_parent().add_child(new_body)
+				new_body.z_index = 10 if body_layer == 1 else 5
+				
+				set_body_regions(new_body, local_regions)
+				rebuild_body_visuals_and_collisions(new_body, local_regions, body_layer)
+				apply_layer_modulation(new_body, body_layer)
+				
+				# Freeze if physics is paused
+				if is_physics_paused and not is_static:
+					new_body.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC
+					new_body.freeze = true
+				
+				# Track the new body
+				if is_static:
+					existing_static_bodies.append(new_body)
+				else:
+					existing_drawn_bodies.append(new_body)
+				
+				print("Created fragment body %d with %d regions" % [i, local_regions.size()])
+		
+		print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
 
 
 func start_new_polygon_preview() -> void:
@@ -848,8 +786,8 @@ func find_overlapping_bodies(polygon: PackedVector2Array, layer: int) -> Array:
 
 
 func polygons_overlap(poly_a: PackedVector2Array, poly_b: PackedVector2Array, offset_b: Vector2 = Vector2.ZERO) -> bool:
-	"""Checks if two polygons overlap (simple AABB check for performance)"""
-	# Calculate AABB for poly_a
+	"""Checks if two polygons actually overlap using precise intersection detection"""
+	# First do a quick AABB check for early rejection
 	var min_a = poly_a[0]
 	var max_a = poly_a[0]
 	for point in poly_a:
@@ -868,10 +806,24 @@ func polygons_overlap(poly_a: PackedVector2Array, poly_b: PackedVector2Array, of
 		max_b.x = max(max_b.x, world_point.x)
 		max_b.y = max(max_b.y, world_point.y)
 	
-	# Check AABB overlap with merge distance tolerance
-	var tolerance = MERGE_DISTANCE
-	return not (max_a.x + tolerance < min_b.x or max_b.x + tolerance < min_a.x or 
-				max_a.y + tolerance < min_b.y or max_b.y + tolerance < min_a.y)
+	# Quick AABB rejection (no tolerance - just check if bounding boxes overlap at all)
+	if max_a.x < min_b.x or max_b.x < min_a.x or max_a.y < min_b.y or max_b.y < min_a.y:
+		return false
+	
+	# AABB overlaps - now do precise polygon intersection check
+	# Convert poly_b to world space
+	var poly_b_world = PackedVector2Array()
+	for point in poly_b:
+		poly_b_world.append(point + offset_b)
+	
+	# Check if polygons actually intersect
+	var intersection = Geometry2D.intersect_polygons(poly_a, poly_b_world)
+	if intersection.size() > 0:
+		return true
+	
+	# Also check if they touch (merge would produce single polygon)
+	var merged = Geometry2D.merge_polygons(poly_a, poly_b_world)
+	return merged.size() == 1
 
 
 func _on_cursor_mode_changed(active: bool) -> void:
@@ -1009,6 +961,18 @@ func create_physics_body_from_polygon(polygon: PackedVector2Array, material: Dra
 	# Apply layer visual modulation
 	apply_layer_modulation(physics_body, layer)
 	
+	# Store material and region information for multi-material support
+	if material != null:
+		physics_body.set_meta("draw_material", material)
+	
+	# Create initial material region
+	var initial_region = MaterialRegion.new()
+	initial_region.polygon = local_polygon
+	initial_region.material = material
+	initial_region.shader_material = shader_mat
+	initial_region.update_convex_pieces()
+	set_body_regions(physics_body, [initial_region])
+	
 	# If physics is paused, freeze this body immediately
 	if is_physics_paused and not is_static:
 		physics_body.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC
@@ -1063,14 +1027,297 @@ func calculate_polygon_centroid(polygon: PackedVector2Array) -> Vector2:
 	return centroid
 
 
+# =============================================================================
+# MULTI-MATERIAL REGION MANAGEMENT
+# =============================================================================
+
+func get_body_regions(body: Node2D) -> Array:
+	"""Gets the material regions stored on a physics body, or creates a single-region array from legacy body"""
+	if body.has_meta("material_regions"):
+		return body.get_meta("material_regions")
+	
+	# Legacy body - create a single region from its Polygon2D
+	var regions: Array = []
+	for child in body.get_children():
+		if child is Polygon2D:
+			var region = MaterialRegion.new()
+			region.polygon = child.polygon.duplicate()
+			# Try to extract material from shader
+			if child.material is ShaderMaterial:
+				region.shader_material = child.material
+			# Try to get material from body metadata
+			if body.has_meta("draw_material"):
+				region.material = body.get_meta("draw_material")
+			region.update_convex_pieces()
+			regions.append(region)
+			break
+	
+	return regions
+
+
+func set_body_regions(body: Node2D, regions: Array) -> void:
+	"""Sets the material regions on a physics body"""
+	body.set_meta("material_regions", regions)
+
+
+func merge_new_polygon_into_regions(existing_regions: Array, new_polygon: PackedVector2Array, new_material: DrawMaterial, new_shader: ShaderMaterial) -> Array:
+	"""
+	Merges a new polygon with material into existing regions.
+	The new material OVERRIDES any existing material in the overlapping area.
+	Returns the updated array of MaterialRegions.
+	"""
+	var result_regions: Array = []
+	
+	# For each existing region, clip away the new polygon's footprint
+	for region in existing_regions:
+		var clipped = Geometry2D.clip_polygons(region.polygon, new_polygon)
+		
+		for remaining_poly in clipped:
+			if remaining_poly.size() >= 3:
+				var area = calculate_polygon_area(remaining_poly)
+				if area >= MIN_REGION_AREA:
+					var new_region = MaterialRegion.new()
+					new_region.polygon = remaining_poly
+					new_region.material = region.material
+					new_region.shader_material = region.shader_material
+					new_region.update_convex_pieces()
+					result_regions.append(new_region)
+	
+	# Add the new polygon as a new region
+	if new_polygon.size() >= 3:
+		var area = calculate_polygon_area(new_polygon)
+		if area >= MIN_REGION_AREA:
+			var new_region = MaterialRegion.new()
+			new_region.polygon = new_polygon
+			new_region.material = new_material
+			new_region.shader_material = new_shader
+			new_region.update_convex_pieces()
+			result_regions.append(new_region)
+	
+	return result_regions
+
+
+func clip_regions_with_eraser(regions: Array, eraser_polygon: PackedVector2Array) -> Array:
+	"""
+	Clips an eraser polygon from all regions.
+	Returns the updated array of MaterialRegions (may have more regions if split).
+	"""
+	var result_regions: Array = []
+	
+	for region in regions:
+		# First check if eraser actually intersects with this region
+		var intersection = Geometry2D.intersect_polygons(region.polygon, eraser_polygon)
+		
+		if intersection.size() == 0:
+			# No intersection - keep original region unchanged
+			result_regions.append(region)
+			continue
+		
+		# There is an intersection - perform the clip
+		var clipped = Geometry2D.clip_polygons(region.polygon, eraser_polygon)
+		
+		if clipped.size() == 0:
+			# Region was completely erased (eraser fully covers it)
+			continue
+		
+		for remaining_poly in clipped:
+			if remaining_poly.size() >= 3:
+				var area = calculate_polygon_area(remaining_poly)
+				if area >= MIN_REGION_AREA:
+					var new_region = MaterialRegion.new()
+					new_region.polygon = remaining_poly
+					new_region.material = region.material
+					new_region.shader_material = region.shader_material
+					new_region.update_convex_pieces()
+					result_regions.append(new_region)
+	
+	return result_regions
+
+
+func get_combined_polygon_from_regions(regions: Array) -> PackedVector2Array:
+	"""Combines all region polygons into a single outer boundary polygon"""
+	if regions.size() == 0:
+		return PackedVector2Array()
+	
+	if regions.size() == 1:
+		return regions[0].polygon.duplicate()
+	
+	# Merge all region polygons together
+	var combined = regions[0].polygon.duplicate()
+	for i in range(1, regions.size()):
+		var merged = Geometry2D.merge_polygons(combined, regions[i].polygon)
+		if merged.size() > 0:
+			combined = merged[0]
+	
+	return combined
+
+
+func calculate_total_mass_from_regions(regions: Array) -> float:
+	"""Calculates the total mass from all regions based on their individual densities"""
+	var total_mass = 0.0
+	for region in regions:
+		total_mass += region.get_mass_contribution()
+	return max(5.0, total_mass)  # Minimum mass of 5.0
+
+
+func calculate_weighted_centroid_from_regions(regions: Array) -> Vector2:
+	"""Calculates the center of mass weighted by each region's mass contribution"""
+	var total_mass = 0.0
+	var weighted_centroid = Vector2.ZERO
+	
+	for region in regions:
+		var mass = region.get_mass_contribution()
+		var centroid = region.get_centroid()
+		weighted_centroid += centroid * mass
+		total_mass += mass
+	
+	if total_mass > 0.001:
+		weighted_centroid /= total_mass
+	
+	return weighted_centroid
+
+
+func check_regions_contiguous(regions: Array) -> Array[Array]:
+	"""
+	Checks if regions form contiguous groups (touching each other).
+	Returns an array of arrays, where each sub-array contains regions that are connected.
+	"""
+	if regions.size() <= 1:
+		return [regions]
+	
+	# Build adjacency - two regions are adjacent if their polygons overlap or touch
+	var visited: Array[bool] = []
+	visited.resize(regions.size())
+	for i in range(regions.size()):
+		visited[i] = false
+	
+	var groups: Array[Array] = []
+	
+	for start_idx in range(regions.size()):
+		if visited[start_idx]:
+			continue
+		
+		# BFS to find all connected regions
+		var group: Array = []
+		var queue: Array[int] = [start_idx]
+		visited[start_idx] = true
+		
+		while queue.size() > 0:
+			var current_idx = queue.pop_front()
+			group.append(regions[current_idx])
+			
+			# Check all other unvisited regions for adjacency
+			for other_idx in range(regions.size()):
+				if visited[other_idx]:
+					continue
+				
+				# Check if polygons overlap or touch (using merge - if merge produces 1 polygon, they touch)
+				var merged = Geometry2D.merge_polygons(regions[current_idx].polygon, regions[other_idx].polygon)
+				if merged.size() == 1:
+					visited[other_idx] = true
+					queue.append(other_idx)
+		
+		groups.append(group)
+	
+	return groups
+
+
+func rebuild_body_visuals_and_collisions(body: Node2D, regions: Array, layer: int) -> void:
+	"""Rebuilds the visual and collision children of a body based on its material regions"""
+	# Remove existing Polygon2D and CollisionPolygon2D children
+	var children_to_remove: Array[Node] = []
+	for child in body.get_children():
+		if child is Polygon2D or child is CollisionPolygon2D:
+			children_to_remove.append(child)
+	
+	for child in children_to_remove:
+		child.queue_free()
+	
+	# Create new visual and collision for each region
+	var region_index = 0
+	for region in regions:
+		# Create Polygon2D visual for this region
+		var visual_polygon = Polygon2D.new()
+		visual_polygon.polygon = region.polygon
+		visual_polygon.color = Color(1.0, 1.0, 1.0, 0.5)
+		visual_polygon.name = "Region_%d_Visual" % region_index
+		
+		# Apply shader material
+		if region.shader_material != null:
+			visual_polygon.material = region.shader_material
+		else:
+			visual_polygon.material = create_shader_material_for(region.material, layer)
+		
+		body.add_child(visual_polygon)
+		
+		# Create CollisionPolygon2D children for this region (with convex decomposition)
+		# Each collision shape gets its own PhysicsMaterial based on the region
+		if region.convex_pieces.size() == 0:
+			region.update_convex_pieces()
+		
+		var collision_idx = 0
+		for convex_poly in region.convex_pieces:
+			if convex_poly.size() >= 3:
+				var collision = CollisionPolygon2D.new()
+				collision.polygon = convex_poly
+				collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
+				collision.name = "Region_%d_Collision_%d" % [region_index, collision_idx]
+				
+				# Store material reference on collision for physics queries
+				if region.material != null:
+					collision.set_meta("draw_material", region.material)
+					collision.set_meta("density", region.material.density)
+					collision.set_meta("friction", region.material.friction)
+					collision.set_meta("bounce", region.material.bounce)
+				
+				body.add_child(collision)
+				collision_idx += 1
+		
+		# Fallback if no convex pieces
+		if collision_idx == 0 and region.polygon.size() >= 3:
+			var collision = CollisionPolygon2D.new()
+			collision.polygon = region.polygon
+			collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
+			collision.name = "Region_%d_Collision_Fallback" % region_index
+			if region.material != null:
+				collision.set_meta("draw_material", region.material)
+			body.add_child(collision)
+		
+		region_index += 1
+	
+	# Update debug Line2D if it exists (show combined outline)
+	for child in body.get_children():
+		if child is Line2D and child.default_color == Color(1.0, 0.0, 0.0, 1.0):
+			child.clear_points()
+			var combined = get_combined_polygon_from_regions(regions)
+			for point in combined:
+				child.add_point(point)
+			if combined.size() > 0:
+				child.add_point(combined[0])
+			break
+	
+	# Update mass for RigidBody2D
+	if body is RigidBody2D:
+		body.mass = calculate_total_mass_from_regions(regions)
+		
+		# Set weighted center of mass
+		var weighted_centroid = calculate_weighted_centroid_from_regions(regions)
+		body.center_of_mass_mode = RigidBody2D.CENTER_OF_MASS_MODE_CUSTOM
+		body.center_of_mass = weighted_centroid
+
+
 func merge_polygon_into_bodies(polygon: PackedVector2Array, bodies: Array) -> void:
-	"""Merges a new polygon into one or more existing bodies using Boolean operations"""
+	"""
+	Merges a new polygon into one or more existing bodies using Boolean operations.
+	Now supports multi-material regions - the new material overrides existing materials
+	in the overlapping area while preserving non-overlapping regions.
+	"""
 	if bodies.size() == 0:
 		return
 	
-	print("=== MERGE START: %d bodies to merge ===" % bodies.size())
+	print("=== MATERIAL MERGE START: %d bodies to merge ===" % bodies.size())
 	
-	# If multiple bodies, merge them all together into the first one
+	# Target body is the first overlapping body - all other bodies merge into it
 	var target_body = bodies[0]
 	
 	if not is_instance_valid(target_body):
@@ -1079,35 +1326,23 @@ func merge_polygon_into_bodies(polygon: PackedVector2Array, bodies: Array) -> vo
 	
 	print("Target body: %s" % target_body)
 	
-	# Find the Polygon2D in the target body
-	var target_visual: Polygon2D = null
-	for child in target_body.get_children():
-		if child is Polygon2D:
-			target_visual = child
-			break
+	var target_layer = target_body.get_meta("layer", 1)
 	
-	if target_visual == null:
-		print("Warning: Target body missing Polygon2D")
-		return
+	# Get existing regions from target body (or create from legacy single-material body)
+	var all_regions: Array = get_body_regions(target_body)
+	print("Target body has %d existing regions" % all_regions.size())
 	
-	# Start with the target body's polygon
-	var merged_polygon = target_visual.polygon
-	print("Starting with target polygon: %d vertices" % merged_polygon.size())
-	
-	# First, merge the new drawn polygon with the target body
+	# Convert new polygon to target body's local space
 	var local_polygon = PackedVector2Array()
 	for point in polygon:
 		local_polygon.append(target_body.to_local(point))
 	
-	print("Merging new drawn polygon: %d vertices" % local_polygon.size())
-	var initial_merge = Geometry2D.merge_polygons(merged_polygon, local_polygon)
-	print("Initial merge result: %d polygons" % initial_merge.size())
+	# Create shader material for the new polygon
+	var new_shader = current_polygon_shader
+	if new_shader == null:
+		new_shader = create_shader_material_for(current_polygon_material, target_layer)
 	
-	if initial_merge.size() > 0:
-		merged_polygon = initial_merge[0]
-		print("Merged polygon now has: %d vertices" % merged_polygon.size())
-	
-	# Now try to merge additional bodies into the expanded target (if any)
+	# Merge additional bodies' regions into our collection first
 	for i in range(1, bodies.size()):
 		var other_body = bodies[i]
 		print("Processing body %d: %s" % [i, other_body])
@@ -1116,95 +1351,48 @@ func merge_polygon_into_bodies(polygon: PackedVector2Array, bodies: Array) -> vo
 			print("  - Body %d is invalid, skipping" % i)
 			continue
 		
-		# Find the polygon from the other body
-		var other_visual: Polygon2D = null
-		for child in other_body.get_children():
-			if child is Polygon2D:
-				other_visual = child
-				break
+		# Get regions from other body
+		var other_regions = get_body_regions(other_body)
+		print("  - Body %d has %d regions" % [i, other_regions.size()])
 		
-		if other_visual == null:
-			print("  - Body %d has no Polygon2D, skipping" % i)
-			continue
+		# Convert each region's polygon to target body's local space
+		for region in other_regions:
+			var converted_region = region.duplicate_region()
+			var converted_polygon = PackedVector2Array()
+			for point in region.polygon:
+				var global_point = other_body.to_global(point)
+				converted_polygon.append(target_body.to_local(global_point))
+			converted_region.polygon = converted_polygon
+			converted_region.update_convex_pieces()
+			all_regions.append(converted_region)
 		
-		print("  - Body %d polygon: %d vertices" % [i, other_visual.polygon.size()])
-		
-		# Convert other body's polygon to target body's local space
-		var other_polygon_global = PackedVector2Array()
-		for point in other_visual.polygon:
-			other_polygon_global.append(other_body.to_global(point))
-		
-		var other_polygon_local = PackedVector2Array()
-		for point in other_polygon_global:
-			other_polygon_local.append(target_body.to_local(point))
-		
-		# Merge the polygons
-		var merge_result = Geometry2D.merge_polygons(merged_polygon, other_polygon_local)
-		print("  - Merge result: %d polygons" % merge_result.size())
-		
-		# Only merge if result is a single polygon (sufficient overlap)
-		if merge_result.size() == 1:
-			merged_polygon = merge_result[0]
-			print("  - SUCCESS: Merged into single polygon with %d vertices" % merged_polygon.size())
-			
-			# Defer removal of the other body to avoid physics issues
-			print("  - Queuing body %d for deletion" % i)
-			other_body.call_deferred("queue_free")
-			if other_body in existing_drawn_bodies:
-				existing_drawn_bodies.erase(other_body)
-				print("  - Removed from existing_drawn_bodies")
-			if other_body in existing_static_bodies:
-				existing_static_bodies.erase(other_body)
-				print("  - Removed from existing_static_bodies")
-		else:
-			print("  - SKIPPED: Not enough overlap to merge (would create %d separate polygons)" % merge_result.size())
+		# Remove the merged body
+		print("  - Queuing body %d for deletion" % i)
+		other_body.call_deferred("queue_free")
+		if other_body in existing_drawn_bodies:
+			existing_drawn_bodies.erase(other_body)
+		if other_body in existing_static_bodies:
+			existing_static_bodies.erase(other_body)
 	
-	# Update the target body with the final merged polygon
-	print("Final merged polygon: %d vertices" % merged_polygon.size())
+	print("Total regions before new polygon: %d" % all_regions.size())
 	
-	# Update visual polygon
-	target_visual.polygon = merged_polygon
+	# Now merge the new polygon into all existing regions
+	# The new material OVERRIDES existing materials in the overlap
+	var updated_regions = merge_new_polygon_into_regions(all_regions, local_polygon, current_polygon_material, new_shader)
 	
-	# Remove all existing collision polygons and recreate
-	for child in target_body.get_children():
-		if child is CollisionPolygon2D:
-			child.queue_free()
+	print("Total regions after merge: %d" % updated_regions.size())
 	
-	# Create new collision polygons with convex decomposition
-	var convex_polygons = Geometry2D.decompose_polygon_in_convex(merged_polygon)
-	if convex_polygons.size() > 24:
-		var simple_collision = CollisionPolygon2D.new()
-		simple_collision.polygon = merged_polygon
-		simple_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
-		target_body.add_child(simple_collision)
-	elif convex_polygons.size() > 0:
-		for convex_poly in convex_polygons:
-			var convex_collision = CollisionPolygon2D.new()
-			convex_collision.polygon = convex_poly
-			convex_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
-			target_body.add_child(convex_collision)
-	else:
-		var fallback_collision = CollisionPolygon2D.new()
-		fallback_collision.polygon = merged_polygon
-		fallback_collision.build_mode = CollisionPolygon2D.BUILD_SOLIDS
-		target_body.add_child(fallback_collision)
+	# Store updated regions on the body
+	set_body_regions(target_body, updated_regions)
 	
-	# Update debug Line2D if it exists
-	for child in target_body.get_children():
-		if child is Line2D and child.default_color == Color(1.0, 0.0, 0.0, 1.0):
-			child.clear_points()
-			for point in merged_polygon:
-				child.add_point(point)
-			child.add_point(merged_polygon[0])
-			break
+	# Also store the primary draw material for legacy compatibility
+	if current_polygon_material != null:
+		target_body.set_meta("draw_material", current_polygon_material)
 	
-	# Update mass if it's a RigidBody2D
-	if target_body is RigidBody2D:
-		var area = calculate_polygon_area(merged_polygon)
-		target_body.mass = max(5.0, area * 0.02)
-		print("Updated mass: %f" % target_body.mass)
+	# Rebuild visuals and collisions
+	rebuild_body_visuals_and_collisions(target_body, updated_regions, target_layer)
 	
-	print("=== MERGE COMPLETE ===")
+	print("=== MATERIAL MERGE COMPLETE ===")
 
 
 func create_collision_shape_for_brush(brush_shape: String, brush_scale: float = 1.0) -> Shape2D:
