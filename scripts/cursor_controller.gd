@@ -117,6 +117,14 @@ func _on_toolbox_click() -> void:
 			var string_tool = get_tree().get_first_node_in_group("string_tool")
 			if string_tool:
 				string_tool.place_string_point(global_position)
+		"elastic":
+			var elastic_tool = get_tree().get_first_node_in_group("elastic_tool")
+			if elastic_tool:
+				elastic_tool.place_elastic_point(global_position)
+		"rod":
+			var rod_tool = get_tree().get_first_node_in_group("rod_tool")
+			if rod_tool:
+				rod_tool.place_rod_point(global_position)
 
 
 func update_cursor_from_mouse() -> void:

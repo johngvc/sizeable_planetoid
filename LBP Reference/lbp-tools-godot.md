@@ -92,12 +92,12 @@
 - Custom script with sin/cos oscillation
 - Tween animations
 
-#### String
-**Functionality:** Basic connector between two objects
-**Godot Implementation:**
-- Line2D for visual
-- DampedSpringJoint2D
-- Verlet integration for physics
+1. Simple Connection (Direct Link)
+To connect two bodies with a single "string" that allows them to swing or pull each other:
+Use a PinJoint2D: This acts like a nail or hinge at a specific point.
+Place a PinJoint2D between your two objects.
+In the Inspector, assign Node A to your first body (e.g., a StaticBody2D for an anchor) and Node B to the second (e.g., a RigidBody2D for a swinging object).
+Softness: Adjust the Softness property to give it a slight "springy" or rope-like feel.****
 
 #### Elastic
 **Functionality:** Stretchy string connector

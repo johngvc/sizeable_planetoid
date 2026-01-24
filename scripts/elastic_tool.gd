@@ -1,13 +1,13 @@
 extends Node2D
-## Manages placing strings (rope-like connectors) between physics bodies
-## Strings allow inward movement but prevent stretching beyond initial length
-## Uses high stiffness force-based constraint for minimal elasticity
+## Manages placing elastic connectors between physics bodies
+## Elastics allow free movement within their length and stretch when pulled
+## Uses force-based constraint with springy behavior
 
-const STRING_WIDTH: float = 2.0
+const ELASTIC_WIDTH: float = 2.0
 const DETECTION_RADIUS: float = 20.0
 
-# Track all placed strings
-var placed_strings: Array = []  # Array of { body_a, body_b, line, attach_local_a, attach_local_b, max_length }
+# Track all placed elastics
+var placed_elastics: Array = []  # Array of { body_a, body_b, line, attach_local_a, attach_local_b, max_length }
 
 # Two-click workflow state
 var pending_first_body: PhysicsBody2D = null
@@ -19,24 +19,24 @@ var preview_line: Line2D = null
 
 
 func _ready() -> void:
-	add_to_group("string_tool")
+	add_to_group("elastic_tool")
 	_create_preview_line()
 
 
 func _create_preview_line() -> void:
 	preview_line = Line2D.new()
-	preview_line.width = STRING_WIDTH
-	preview_line.default_color = Color(0.6, 0.4, 0.2, 0.5)  # Semi-transparent brown
+	preview_line.width = ELASTIC_WIDTH
+	preview_line.default_color = Color(0.2, 0.8, 0.3, 0.5)  # Semi-transparent green
 	preview_line.visible = false
 	preview_line.z_index = 15
 	add_child(preview_line)
 
 
 func _physics_process(_delta: float) -> void:
-	# Apply rope constraints and update visuals
-	for string_data in placed_strings:
-		_apply_rope_constraint(string_data)
-		_update_string_visual(string_data)
+	# Apply elastic constraints and update visuals
+	for elastic_data in placed_elastics:
+		_apply_elastic_constraint(elastic_data)
+		_update_elastic_visual(elastic_data)
 	
 	# Update preview line if we have a pending first point
 	if pending_first_body != null and is_instance_valid(pending_first_body):
@@ -52,18 +52,18 @@ func _physics_process(_delta: float) -> void:
 			preview_line.visible = false
 
 
-func _apply_rope_constraint(string_data: Dictionary) -> void:
-	"""Apply rope constraint - prevents stretching beyond max_length with minimal elasticity"""
-	var body_a: PhysicsBody2D = string_data.body_a
-	var body_b: PhysicsBody2D = string_data.body_b
-	var max_length: float = string_data.max_length
+func _apply_elastic_constraint(elastic_data: Dictionary) -> void:
+	"""Apply elastic constraint - stretchy spring-like behavior"""
+	var body_a: PhysicsBody2D = elastic_data.body_a
+	var body_b: PhysicsBody2D = elastic_data.body_b
+	var max_length: float = elastic_data.max_length
 	
 	if not is_instance_valid(body_a) or not is_instance_valid(body_b):
 		return
 	
 	# Get current attachment positions
-	var global_a = body_a.to_global(string_data.attach_local_a)
-	var global_b = body_b.to_global(string_data.attach_local_b)
+	var global_a = body_a.to_global(elastic_data.attach_local_a)
+	var global_b = body_b.to_global(elastic_data.attach_local_b)
 	
 	# Calculate current distance
 	var delta_pos = global_b - global_a
@@ -71,7 +71,7 @@ func _apply_rope_constraint(string_data: Dictionary) -> void:
 	
 	# Only apply constraint if stretched beyond max length
 	if current_length <= max_length:
-		return  # Within rope length, free movement allowed
+		return  # Within elastic length, free movement allowed
 	
 	var direction = delta_pos.normalized()
 	var excess = current_length - max_length
@@ -83,55 +83,55 @@ func _apply_rope_constraint(string_data: Dictionary) -> void:
 	if not a_is_dynamic and not b_is_dynamic:
 		return
 	
-	# Very high stiffness for minimal stretch (like a rope, not a rubber band)
-	var stiffness = 800.0  # Strong corrective force
-	var damping = 40.0  # Strong velocity damping to prevent oscillation
+	# Soft elastic force - allows stretching
+	var stiffness = 100.0  # Gentle spring force
+	var damping = 5.0  # Velocity damping
 	
 	if a_is_dynamic and b_is_dynamic:
 		var total_inv_mass = (1.0 / body_a.mass) + (1.0 / body_b.mass)
 		var ratio_a = (1.0 / body_a.mass) / total_inv_mass
 		var ratio_b = (1.0 / body_b.mass) / total_inv_mass
 		
-		# Get relative velocity along rope direction
+		# Get relative velocity along elastic direction
 		var rel_vel = body_b.linear_velocity - body_a.linear_velocity
-		var vel_along_rope = rel_vel.dot(direction)
+		var vel_along_elastic = rel_vel.dot(direction)
 		
-		# Apply strong corrective force
+		# Apply force only if moving apart or already stretched
 		var force_mag = excess * stiffness
-		if vel_along_rope > 0:
-			force_mag += vel_along_rope * damping * body_a.mass
+		if vel_along_elastic > 0:
+			force_mag += vel_along_elastic * damping * body_a.mass
 		
 		var force = direction * force_mag
 		body_a.apply_central_force(force * ratio_a)
 		body_b.apply_central_force(-force * ratio_b)
 		
 	elif a_is_dynamic:
-		var vel_along_rope = body_a.linear_velocity.dot(-direction)
+		var vel_along_elastic = body_a.linear_velocity.dot(-direction)
 		var force_mag = excess * stiffness
-		if vel_along_rope < 0:
-			force_mag += -vel_along_rope * damping * body_a.mass
+		if vel_along_elastic < 0:
+			force_mag += -vel_along_elastic * damping * body_a.mass
 		body_a.apply_central_force(direction * force_mag)
 		
 	else:  # b_is_dynamic
-		var vel_along_rope = body_b.linear_velocity.dot(direction)
+		var vel_along_elastic = body_b.linear_velocity.dot(direction)
 		var force_mag = excess * stiffness
-		if vel_along_rope > 0:
-			force_mag += vel_along_rope * damping * body_b.mass
+		if vel_along_elastic > 0:
+			force_mag += vel_along_elastic * damping * body_b.mass
 		body_b.apply_central_force(-direction * force_mag)
 
 
-func _update_string_visual(string_data: Dictionary) -> void:
-	"""Update a string's Line2D to follow its connected bodies"""
-	var line: Line2D = string_data.line
-	var body_a: PhysicsBody2D = string_data.body_a
-	var body_b: PhysicsBody2D = string_data.body_b
+func _update_elastic_visual(elastic_data: Dictionary) -> void:
+	"""Update an elastic's Line2D to follow its connected bodies"""
+	var line: Line2D = elastic_data.line
+	var body_a: PhysicsBody2D = elastic_data.body_a
+	var body_b: PhysicsBody2D = elastic_data.body_b
 	
 	if not is_instance_valid(line) or not is_instance_valid(body_a) or not is_instance_valid(body_b):
 		return
 	
 	# Convert local attachment points to global positions
-	var global_a = body_a.to_global(string_data.attach_local_a)
-	var global_b = body_b.to_global(string_data.attach_local_b)
+	var global_a = body_a.to_global(elastic_data.attach_local_a)
+	var global_b = body_b.to_global(elastic_data.attach_local_b)
 	
 	# Update line points
 	line.clear_points()
@@ -139,12 +139,12 @@ func _update_string_visual(string_data: Dictionary) -> void:
 	line.add_point(global_b)
 
 
-func place_string_point(world_position: Vector2) -> void:
-	"""Handle a click for placing strings (two-click workflow)"""
+func place_elastic_point(world_position: Vector2) -> void:
+	"""Handle a click for placing elastics (two-click workflow)"""
 	var body = find_body_at_position(world_position)
 	
 	if body == null:
-		print("⚠ No object found at string position")
+		print("⚠ No object found at elastic position")
 		cancel_pending()
 		return
 	
@@ -153,15 +153,15 @@ func place_string_point(world_position: Vector2) -> void:
 		pending_first_body = body
 		pending_attach_local = body.to_local(world_position)
 		pending_attach_world = world_position
-		print("✓ String start point set - click on another object to complete")
+		print("✓ Elastic start point set - click on another object to complete")
 	else:
-		# Second click - create the string
+		# Second click - create the elastic
 		if body == pending_first_body:
 			print("⚠ Cannot connect an object to itself")
 			return
 		
 		var attach_local_b = body.to_local(world_position)
-		create_string(pending_first_body, pending_attach_local, body, attach_local_b)
+		create_elastic(pending_first_body, pending_attach_local, body, attach_local_b)
 		
 		# Reset pending state
 		pending_first_body = null
@@ -169,23 +169,23 @@ func place_string_point(world_position: Vector2) -> void:
 		pending_attach_world = Vector2.ZERO
 
 
-func create_string(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2D, local_b: Vector2) -> void:
-	"""Create a rope-like string connection between two bodies"""
+func create_elastic(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2D, local_b: Vector2) -> void:
+	"""Create an elastic connection between two bodies"""
 	var global_a = body_a.to_global(local_a)
 	var global_b = body_b.to_global(local_b)
 	var max_length = global_a.distance_to(global_b)
 	
 	# Create visual Line2D
 	var line = Line2D.new()
-	line.width = STRING_WIDTH
-	line.default_color = Color(0.6, 0.4, 0.2)  # Brown rope color
+	line.width = ELASTIC_WIDTH
+	line.default_color = Color(0.2, 0.8, 0.3)  # Green elastic color
 	line.z_index = 10
 	line.add_point(global_a)
 	line.add_point(global_b)
 	add_child(line)
 	
-	# Track the string (using custom constraint, not a joint)
-	placed_strings.append({
+	# Track the elastic (using custom constraint, not a joint)
+	placed_elastics.append({
 		"body_a": body_a,
 		"body_b": body_b,
 		"line": line,
@@ -194,7 +194,7 @@ func create_string(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2
 		"max_length": max_length
 	})
 	
-	print("✓ String placed connecting two objects (max length: %.1f)" % max_length)
+	print("✓ Elastic placed connecting two objects (rest length: %.1f)" % max_length)
 
 
 func find_body_at_position(position: Vector2) -> PhysicsBody2D:
@@ -230,26 +230,26 @@ func cancel_pending() -> void:
 		preview_line.visible = false
 
 
-func remove_string_at_position(position: Vector2, threshold: float = 20.0) -> bool:
-	"""Remove a string near the given position"""
-	for i in range(placed_strings.size() - 1, -1, -1):
-		var string_data = placed_strings[i]
+func remove_elastic_at_position(position: Vector2, threshold: float = 20.0) -> bool:
+	"""Remove an elastic near the given position"""
+	for i in range(placed_elastics.size() - 1, -1, -1):
+		var elastic_data = placed_elastics[i]
 		
-		if not is_instance_valid(string_data.body_a) or not is_instance_valid(string_data.body_b):
+		if not is_instance_valid(elastic_data.body_a) or not is_instance_valid(elastic_data.body_b):
 			continue
 		
 		# Check distance to the line segment
-		var global_a = string_data.body_a.to_global(string_data.attach_local_a)
-		var global_b = string_data.body_b.to_global(string_data.attach_local_b)
+		var global_a = elastic_data.body_a.to_global(elastic_data.attach_local_a)
+		var global_b = elastic_data.body_b.to_global(elastic_data.attach_local_b)
 		var distance = _point_to_segment_distance(position, global_a, global_b)
 		
 		if distance < threshold:
 			# Clean up visual
-			if is_instance_valid(string_data.line):
-				string_data.line.queue_free()
+			if is_instance_valid(elastic_data.line):
+				elastic_data.line.queue_free()
 			
-			placed_strings.remove_at(i)
-			print("String removed")
+			placed_elastics.remove_at(i)
+			print("Elastic removed")
 			return true
 	
 	return false
@@ -270,13 +270,13 @@ func _point_to_segment_distance(point: Vector2, seg_start: Vector2, seg_end: Vec
 	return point.distance_to(projection)
 
 
-func cleanup_invalid_strings() -> void:
-	"""Remove strings whose connected bodies no longer exist"""
-	for i in range(placed_strings.size() - 1, -1, -1):
-		var string_data = placed_strings[i]
+func cleanup_invalid_elastics() -> void:
+	"""Remove elastics whose connected bodies no longer exist"""
+	for i in range(placed_elastics.size() - 1, -1, -1):
+		var elastic_data = placed_elastics[i]
 		
-		if not is_instance_valid(string_data.body_a) or not is_instance_valid(string_data.body_b):
-			if is_instance_valid(string_data.line):
-				string_data.line.queue_free()
+		if not is_instance_valid(elastic_data.body_a) or not is_instance_valid(elastic_data.body_b):
+			if is_instance_valid(elastic_data.line):
+				elastic_data.line.queue_free()
 			
-			placed_strings.remove_at(i)
+			placed_elastics.remove_at(i)

@@ -205,6 +205,20 @@ layout_mode = 2
 theme_override_font_sizes/font_size = 14
 text = "🧵 String"
 
+[node name="ElasticToolButton" type="CheckBox" parent="ToolboxPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "🎸 Elastic"
+
+[node name="RodToolButton" type="CheckBox" parent="ToolboxPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "📏 Rod"
+
 [node name="Separator" type="HSeparator" parent="ToolboxPanel/VBoxContainer"]
 layout_mode = 2
 
