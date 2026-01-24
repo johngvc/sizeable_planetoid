@@ -32,6 +32,7 @@ signal toolbox_tool_changed(toolbox_tool: String)
 @onready var current_layer_label: Label = %CurrentLayerLabel
 @onready var toolbox_panel: PanelContainer = %ToolboxPanel
 @onready var bolt_tool_button: CheckBox = %BoltToolButton
+@onready var string_tool_button: CheckBox = %StringToolButton
 @onready var fly_mode_indicator: PanelContainer = %FlyModeIndicator
 
 var current_tool: String = "draw_dynamic"
@@ -79,6 +80,7 @@ func _ready() -> void:
 	
 	var toolbox_tool_button_group = ButtonGroup.new()
 	bolt_tool_button.button_group = toolbox_tool_button_group
+	string_tool_button.button_group = toolbox_tool_button_group
 	
 	# Disable space key activation for all buttons
 	_disable_space_for_button(cursor_mode_button)
@@ -99,6 +101,7 @@ func _ready() -> void:
 	_disable_space_for_button(layer2_button)
 	_disable_space_for_button(show_other_layers_button)
 	_disable_space_for_button(bolt_tool_button)
+	_disable_space_for_button(string_tool_button)
 	
 	# Initialize materials
 	materials["wood"] = DrawMaterial.create_wood()
@@ -149,6 +152,7 @@ func _ready() -> void:
 	
 	# Connect toolbox tool buttons
 	bolt_tool_button.pressed.connect(_on_bolt_tool_pressed)
+	string_tool_button.pressed.connect(_on_string_tool_pressed)
 	
 	# Find cursor and connect to mode changes
 	await get_tree().process_frame
@@ -212,6 +216,10 @@ func _on_toolbox_pressed() -> void:
 
 func _on_bolt_tool_pressed() -> void:
 	set_toolbox_tool("bolt")
+
+
+func _on_string_tool_pressed() -> void:
+	set_toolbox_tool("string")
 
 
 func _on_wood_pressed() -> void:

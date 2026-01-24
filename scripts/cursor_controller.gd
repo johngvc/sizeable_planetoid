@@ -102,9 +102,21 @@ func toggle_cursor() -> void:
 
 func _on_toolbox_click() -> void:
 	"""Handle clicks in toolbox mode"""
-	var bolt_tool = get_tree().get_first_node_in_group("bolt_tool")
-	if bolt_tool:
-		bolt_tool.place_bolt(global_position)
+	# Get current toolbox tool from UI
+	var cursor_ui = get_tree().get_first_node_in_group("cursor_mode_ui")
+	var current_toolbox_tool = "bolt"
+	if cursor_ui:
+		current_toolbox_tool = cursor_ui.current_toolbox_tool
+	
+	match current_toolbox_tool:
+		"bolt":
+			var bolt_tool = get_tree().get_first_node_in_group("bolt_tool")
+			if bolt_tool:
+				bolt_tool.place_bolt(global_position)
+		"string":
+			var string_tool = get_tree().get_first_node_in_group("string_tool")
+			if string_tool:
+				string_tool.place_string_point(global_position)
 
 
 func update_cursor_from_mouse() -> void:
