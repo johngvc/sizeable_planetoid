@@ -13,6 +13,9 @@ var RopeEndPieceScene = preload("res://rope/rope_end_piece.tscn")
 # Array of { body_a, body_b, line, attach_local_a, attach_local_b, rope: Rope, anchor_a, anchor_b }
 var placed_strings: Array = []
 
+# Track bodies that need to be unfrozen when game unpauses
+var pending_unfreeze: Array = []  # Array of RigidBody2D
+
 # Two-click workflow state
 var pending_first_body: PhysicsBody2D = null
 var pending_attach_local: Vector2 = Vector2.ZERO
@@ -21,10 +24,32 @@ var pending_attach_world: Vector2 = Vector2.ZERO
 # Preview line for showing pending connection
 var preview_line: Line2D = null
 
+# Reference to draw_manager for pause state
+var _draw_manager: Node = null
+
 
 func _ready() -> void:
 	add_to_group("string_tool")
 	_create_preview_line()
+	# Get reference to draw_manager for pause state checking
+	call_deferred("_find_draw_manager")
+
+
+func _find_draw_manager() -> void:
+	"""Find the draw_manager to check its pause state"""
+	_draw_manager = get_tree().get_first_node_in_group("draw_manager")
+	if _draw_manager:
+		print("✓ string_tool found draw_manager for pause state")
+	else:
+		print("⚠ string_tool could not find draw_manager - pause detection may not work")
+
+
+func _is_physics_paused() -> bool:
+	"""Check if physics is paused using draw_manager's custom pause state"""
+	if _draw_manager and _draw_manager.has_method("get") and "is_physics_paused" in _draw_manager:
+		return _draw_manager.is_physics_paused
+	# Fallback to tree pause state
+	return get_tree().paused
 
 
 func _create_preview_line() -> void:
@@ -36,7 +61,34 @@ func _create_preview_line() -> void:
 	add_child(preview_line)
 
 
+var _last_pause_state: bool = true  # Track pause state changes
+
+
 func _physics_process(_delta: float) -> void:
+	var is_paused = _is_physics_paused()
+	
+	# Debug: Log pause state changes
+	if is_paused != _last_pause_state:
+		print("🔄 Physics pause state changed: %s -> %s" % [_last_pause_state, is_paused])
+		print("   Pending unfreeze count: %d" % pending_unfreeze.size())
+		_last_pause_state = is_paused
+	
+	# Process pending unfreezes when game is running
+	if not is_paused and pending_unfreeze.size() > 0:
+		print("🔓 Processing %d pending unfreezes..." % pending_unfreeze.size())
+		for body in pending_unfreeze:
+			print("   - Body: %s, valid: %s, is RigidBody2D: %s" % [
+				body.name if is_instance_valid(body) else "INVALID",
+				is_instance_valid(body),
+				body is RigidBody2D if is_instance_valid(body) else false
+			])
+			if is_instance_valid(body) and body is RigidBody2D:
+				print("   - Before: freeze=%s" % body.freeze)
+				body.freeze = false
+				print("   - After: freeze=%s" % body.freeze)
+				print("✓ Unfroze body on unpause: %s" % body.name)
+		pending_unfreeze.clear()
+	
 	# Update visuals only - physics handled by joints (no manual position updates!)
 	for string_data in placed_strings:
 		_update_string_visual(string_data)
@@ -130,13 +182,34 @@ func create_string(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2
 	var global_b = body_b.to_global(local_b)
 	var total_distance = global_a.distance_to(global_b)
 	
+	var is_paused = _is_physics_paused()
+	print("🔍 create_string called - is_physics_paused: %s (draw_manager found: %s)" % [is_paused, _draw_manager != null])
+	
 	# Unfreeze RigidBody2D objects so rope physics can work
-	if body_a is RigidBody2D and body_a.freeze:
-		print("⚠ Unfreezing Body A for rope physics")
-		body_a.freeze = false
-	if body_b is RigidBody2D and body_b.freeze:
-		print("⚠ Unfreezing Body B for rope physics")
-		body_b.freeze = false
+	# If paused, defer unfreezing until game unpauses
+	if body_a is RigidBody2D:
+		print("   Body A is RigidBody2D, freeze=%s" % body_a.freeze)
+		if body_a.freeze:
+			if is_paused:
+				print("⏸ Deferring unfreeze of Body A until unpause")
+				if body_a not in pending_unfreeze:
+					pending_unfreeze.append(body_a)
+					print("   Added to pending_unfreeze (now %d items)" % pending_unfreeze.size())
+			else:
+				print("⚠ Unfreezing Body A for rope physics")
+				body_a.freeze = false
+			
+	if body_b is RigidBody2D:
+		print("   Body B is RigidBody2D, freeze=%s" % body_b.freeze)
+		if body_b.freeze:
+			if is_paused:
+				print("⏸ Deferring unfreeze of Body B until unpause")
+				if body_b not in pending_unfreeze:
+					pending_unfreeze.append(body_b)
+					print("   Added to pending_unfreeze (now %d items)" % pending_unfreeze.size())
+			else:
+				print("⚠ Unfreezing Body B for rope physics")
+				body_b.freeze = false
 	
 	# Debug: Log mass information for attached bodies
 	_log_body_info("Body A", body_a)
@@ -151,37 +224,48 @@ func create_string(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2
 	var recommended_segment_mass = max(1.0, max_body_mass / 5.0)  # Keep ratio at 5:1 for stability
 	print("  Recommended segment mass: %.2f (based on max body mass %.2f)" % [recommended_segment_mass, max_body_mass])
 	
-	# Create start anchor - NOT frozen, will be constrained by joint
+	# Create start anchor - freeze if physics is paused
 	var anchor_a: RopePiece = RopeEndPieceScene.instantiate()
 	anchor_a.global_position = global_a
-	anchor_a.freeze = false
+	anchor_a.freeze = is_paused  # Freeze if paused
+	anchor_a.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC if is_paused else RigidBody2D.FREEZE_MODE_KINEMATIC
 	anchor_a.mass = recommended_segment_mass
 	anchor_a.linear_damp = 5.0
 	anchor_a.angular_damp = 5.0
 	anchor_a.collision_layer = 0  # No collisions
 	anchor_a.collision_mask = 0
+	anchor_a.process_mode = Node.PROCESS_MODE_PAUSABLE  # Stop on pause
 	add_child(anchor_a)
+	if is_paused:
+		pending_unfreeze.append(anchor_a)
+		print("⏸ Anchor A created frozen (will unfreeze on unpause)")
 	
-	# Create end anchor - NOT frozen, will be constrained by joint
+	# Create end anchor - freeze if physics is paused
 	var anchor_b: RopePiece = RopeEndPieceScene.instantiate()
 	anchor_b.global_position = global_b
-	anchor_b.freeze = false
+	anchor_b.freeze = is_paused  # Freeze if paused
+	anchor_b.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC if is_paused else RigidBody2D.FREEZE_MODE_KINEMATIC
 	anchor_b.mass = recommended_segment_mass
 	anchor_b.linear_damp = 5.0
 	anchor_b.angular_damp = 5.0
 	anchor_b.collision_layer = 0  # No collisions
 	anchor_b.collision_mask = 0
+	anchor_b.process_mode = Node.PROCESS_MODE_PAUSABLE  # Stop on pause
 	add_child(anchor_b)
+	if is_paused:
+		pending_unfreeze.append(anchor_b)
+		print("⏸ Anchor B created frozen (will unfreeze on unpause)")
 	
 	# Create the Rope instance
 	var rope = Rope.new(anchor_a, ROPE_PIECE_LENGTH)
+	rope.process_mode = Node.PROCESS_MODE_PAUSABLE  # Stop on pause
 	add_child(rope)
 	
 	# Create the rope segments connecting anchor_a to anchor_b
 	rope.create_rope(anchor_b)
 	
-	# Adjust segment masses for stability
-	_adjust_rope_segment_masses(rope, recommended_segment_mass)
+	# Adjust segment masses for stability (freeze if paused)
+	_adjust_rope_segment_masses(rope, recommended_segment_mass, is_paused)
 	
 	# Connect anchors to bodies using PinJoint2D (physics-based connection, no teleportation)
 	var joint_a = _create_anchor_joint(body_a, local_a, anchor_a)
@@ -258,22 +342,36 @@ func _log_rope_info(rope: Rope) -> void:
 	print("  Piece length: %.1f" % rope.piece_length)
 
 
-func _adjust_rope_segment_masses(rope: Rope, target_mass: float) -> void:
+func _adjust_rope_segment_masses(rope: Rope, target_mass: float, freeze_if_paused: bool = false) -> void:
 	"""Adjust the mass of rope segments and disable collisions between them"""
 	var walker: RopePiece = rope.rope_start
+	var segment_count = 0
 	while walker:
 		if walker is RigidBody2D:
 			# Disable all collisions for rope segments
 			walker.collision_layer = 0
 			walker.collision_mask = 0
+			# Stop processing on pause
+			walker.process_mode = Node.PROCESS_MODE_PAUSABLE
 			
-			if not walker.freeze:
-				walker.mass = target_mass
-				# Also increase damping for heavier segments
-				walker.linear_damp = max(walker.linear_damp, 2.0)
-				walker.angular_damp = max(walker.angular_damp, 4.0)
+			# Set mass and damping
+			walker.mass = target_mass
+			walker.linear_damp = max(walker.linear_damp, 2.0)
+			walker.angular_damp = max(walker.angular_damp, 4.0)
+			
+			# Freeze if physics is paused
+			if freeze_if_paused:
+				walker.freeze_mode = RigidBody2D.FREEZE_MODE_STATIC
+				walker.freeze = true
+				if walker not in pending_unfreeze:
+					pending_unfreeze.append(walker)
+				segment_count += 1
 		walker = walker.next_piece
-	print("  Adjusted rope segment masses to: %.2f (collisions disabled)" % target_mass)
+	
+	if freeze_if_paused:
+		print("  Adjusted rope segment masses to: %.2f (collisions disabled, %d segments frozen)" % [target_mass, segment_count])
+	else:
+		print("  Adjusted rope segment masses to: %.2f (collisions disabled)" % target_mass)
 
 
 func find_body_at_position(position: Vector2) -> PhysicsBody2D:
