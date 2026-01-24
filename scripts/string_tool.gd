@@ -89,6 +89,9 @@ func _physics_process(_delta: float) -> void:
 				print("✓ Unfroze body on unpause: %s" % body.name)
 		pending_unfreeze.clear()
 	
+	# Clean up ropes whose connected bodies were deleted
+	_cleanup_invalid_ropes()
+	
 	# Update visuals only - physics handled by joints (no manual position updates!)
 	for string_data in placed_strings:
 		_update_string_visual(string_data)
@@ -105,6 +108,83 @@ func _physics_process(_delta: float) -> void:
 	else:
 		if preview_line:
 			preview_line.visible = false
+
+
+func _cleanup_invalid_ropes() -> void:
+	"""Remove ropes whose connected bodies or attachment points have been deleted"""
+	var ropes_to_remove = []
+	
+	for i in range(placed_strings.size()):
+		var string_data = placed_strings[i]
+		var body_a = string_data.body_a
+		var body_b = string_data.body_b
+		var should_delete = false
+		
+		# Check if either connected body is invalid/deleted
+		if not is_instance_valid(body_a) or not is_instance_valid(body_b):
+			print("🗑️ Rope body deleted - cleaning up rope")
+			should_delete = true
+		# Check if attachment points still exist on the bodies
+		elif not _is_attachment_point_valid(body_a, string_data.attach_local_a):
+			print("🗑️ Rope attachment point A erased - cleaning up rope")
+			should_delete = true
+		elif not _is_attachment_point_valid(body_b, string_data.attach_local_b):
+			print("🗑️ Rope attachment point B erased - cleaning up rope")
+			should_delete = true
+		
+		if should_delete:
+			_delete_rope(string_data)
+			ropes_to_remove.append(i)
+	
+	# Remove invalid ropes from the array (in reverse order to preserve indices)
+	for i in range(ropes_to_remove.size() - 1, -1, -1):
+		placed_strings.remove_at(ropes_to_remove[i])
+
+
+func _is_attachment_point_valid(body: PhysicsBody2D, local_pos: Vector2) -> bool:
+	"""Check if an attachment point still exists on a body (hasn't been erased)"""
+	if not is_instance_valid(body):
+		return false
+	
+	var world_pos = body.to_global(local_pos)
+	var space_state = get_world_2d().direct_space_state
+	var query = PhysicsPointQueryParameters2D.new()
+	query.position = world_pos
+	query.collide_with_bodies = true
+	query.collide_with_areas = false
+	
+	# Query for bodies at this point
+	var results = space_state.intersect_point(query, 1)
+	
+	# Check if the attachment point still intersects with the original body
+	for result in results:
+		if result.collider == body:
+			return true
+	
+	return false
+
+
+func _delete_rope(string_data: Dictionary) -> void:
+	"""Delete all components of a rope"""
+	# Delete visual line
+	if is_instance_valid(string_data.line):
+		string_data.line.queue_free()
+	
+	# Delete joints
+	if is_instance_valid(string_data.joint_a):
+		string_data.joint_a.queue_free()
+	if is_instance_valid(string_data.joint_b):
+		string_data.joint_b.queue_free()
+	
+	# Delete anchors
+	if is_instance_valid(string_data.anchor_a):
+		string_data.anchor_a.queue_free()
+	if is_instance_valid(string_data.anchor_b):
+		string_data.anchor_b.queue_free()
+	
+	# Delete rope (this will also delete all rope segments)
+	if string_data.rope != null and is_instance_valid(string_data.rope):
+		string_data.rope.queue_free()
 
 
 func _update_string_visual(string_data: Dictionary) -> void:
