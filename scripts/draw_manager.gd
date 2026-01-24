@@ -44,7 +44,7 @@ var is_eraser_tool_active: bool = false  # true when eraser tool is selected
 var current_eraser_polygon: PackedVector2Array = PackedVector2Array()  # Current eraser polygon
 var is_currently_erasing: bool = false
 var eraser_throttle_timer: float = 0.0  # Throttle eraser to prevent physics spam
-const ERASER_THROTTLE_MS: float = 16.0  # Minimum ms between eraser operations (~60 FPS)
+const ERASER_THROTTLE_MS: float = 50.0  # Minimum ms between eraser operations (~20 FPS for performance)
 
 # Brush shape state
 var current_brush_shape: String = "circle"  # "circle" or "square"
@@ -517,9 +517,36 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 	for point in erase_brush:
 		local_erase_brush.append(body.to_local(point))
 	
-	# Early out: check if eraser intersects with any region
+	# Pre-compute eraser AABB for fast rejection
+	var eraser_min = local_erase_brush[0]
+	var eraser_max = local_erase_brush[0]
+	for point in local_erase_brush:
+		eraser_min.x = min(eraser_min.x, point.x)
+		eraser_min.y = min(eraser_min.y, point.y)
+		eraser_max.x = max(eraser_max.x, point.x)
+		eraser_max.y = max(eraser_max.y, point.y)
+	
+	# Early out: check if eraser intersects with any region using AABB first
 	var has_intersection = false
 	for region in regions:
+		var poly = region.polygon
+		if poly.size() == 0:
+			continue
+		
+		# Quick AABB check
+		var region_min = poly[0]
+		var region_max = poly[0]
+		for point in poly:
+			region_min.x = min(region_min.x, point.x)
+			region_min.y = min(region_min.y, point.y)
+			region_max.x = max(region_max.x, point.x)
+			region_max.y = max(region_max.y, point.y)
+		
+		if eraser_max.x < region_min.x or region_max.x < eraser_min.x or \
+		   eraser_max.y < region_min.y or region_max.y < eraser_min.y:
+			continue  # No AABB overlap with this region
+		
+		# AABB overlaps - do precise check
 		var intersection = Geometry2D.intersect_polygons(region.polygon, local_erase_brush)
 		if intersection.size() > 0:
 			has_intersection = true
@@ -534,7 +561,9 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 	print("Body has %d regions before erase" % regions.size())
 	
 	# Clip eraser from all regions
+	var clip_start = Time.get_ticks_msec()
 	var updated_regions = clip_regions_with_eraser(regions, local_erase_brush)
+	print("  [TIMING] clip_regions_with_eraser: %d ms" % (Time.get_ticks_msec() - clip_start))
 	print("Body has %d regions after erase" % updated_regions.size())
 	
 	# Get body properties
@@ -552,14 +581,27 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 		print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
 		return
 	
+	# Skip contiguity check for single region (common case - no split possible)
+	if updated_regions.size() == 1:
+		set_body_regions(body, updated_regions)
+		var rebuild_start = Time.get_ticks_msec()
+		rebuild_body_visuals_and_collisions(body, updated_regions, body_layer)
+		print("  [TIMING] rebuild_body_visuals_and_collisions: %d ms" % (Time.get_ticks_msec() - rebuild_start))
+		print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
+		return
+	
 	# Check if regions are still contiguous (connected)
+	var contiguous_start = Time.get_ticks_msec()
 	var contiguous_groups = check_regions_contiguous(updated_regions)
+	print("  [TIMING] check_regions_contiguous: %d ms" % (Time.get_ticks_msec() - contiguous_start))
 	print("Found %d contiguous groups" % contiguous_groups.size())
 	
 	if contiguous_groups.size() == 1:
 		# All regions still connected - update this body
 		set_body_regions(body, updated_regions)
+		var rebuild_start = Time.get_ticks_msec()
 		rebuild_body_visuals_and_collisions(body, updated_regions, body_layer)
+		print("  [TIMING] rebuild_body_visuals_and_collisions: %d ms" % (Time.get_ticks_msec() - rebuild_start))
 		print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
 	else:
 		# Regions split into multiple disconnected groups - need to create separate bodies
@@ -1101,11 +1143,48 @@ func clip_regions_with_eraser(regions: Array, eraser_polygon: PackedVector2Array
 	"""
 	Clips an eraser polygon from all regions.
 	Returns the updated array of MaterialRegions (may have more regions if split).
+	Optimized with AABB pre-check for faster rejection.
 	"""
+	var clip_start = Time.get_ticks_msec()
 	var result_regions: Array = []
+	var aabb_rejections = 0
+	var intersection_checks = 0
+	var clip_operations = 0
+	var convex_updates = 0
+	
+	# Pre-compute eraser AABB once
+	var eraser_min = eraser_polygon[0]
+	var eraser_max = eraser_polygon[0]
+	for point in eraser_polygon:
+		eraser_min.x = min(eraser_min.x, point.x)
+		eraser_min.y = min(eraser_min.y, point.y)
+		eraser_max.x = max(eraser_max.x, point.x)
+		eraser_max.y = max(eraser_max.y, point.y)
 	
 	for region in regions:
-		# First check if eraser actually intersects with this region
+		# Quick AABB rejection
+		var poly = region.polygon
+		if poly.size() == 0:
+			continue
+			
+		var region_min = poly[0]
+		var region_max = poly[0]
+		for point in poly:
+			region_min.x = min(region_min.x, point.x)
+			region_min.y = min(region_min.y, point.y)
+			region_max.x = max(region_max.x, point.x)
+			region_max.y = max(region_max.y, point.y)
+		
+		# Check AABB overlap
+		if eraser_max.x < region_min.x or region_max.x < eraser_min.x or \
+		   eraser_max.y < region_min.y or region_max.y < eraser_min.y:
+			# No AABB overlap - keep original region unchanged
+			result_regions.append(region)
+			aabb_rejections += 1
+			continue
+		
+		# AABB overlaps - check actual polygon intersection
+		intersection_checks += 1
 		var intersection = Geometry2D.intersect_polygons(region.polygon, eraser_polygon)
 		
 		if intersection.size() == 0:
@@ -1114,6 +1193,7 @@ func clip_regions_with_eraser(regions: Array, eraser_polygon: PackedVector2Array
 			continue
 		
 		# There is an intersection - perform the clip
+		clip_operations += 1
 		var clipped = Geometry2D.clip_polygons(region.polygon, eraser_polygon)
 		
 		if clipped.size() == 0:
@@ -1122,14 +1202,23 @@ func clip_regions_with_eraser(regions: Array, eraser_polygon: PackedVector2Array
 		
 		for remaining_poly in clipped:
 			if remaining_poly.size() >= 3:
-				var area = calculate_polygon_area(remaining_poly)
+				# Simplify polygon to prevent vertex accumulation
+				var simplified_poly = remaining_poly
+				if remaining_poly.size() > 50:
+					simplified_poly = simplify_polygon(remaining_poly)
+				
+				var area = calculate_polygon_area(simplified_poly)
 				if area >= MIN_REGION_AREA:
 					var new_region = MaterialRegion.new()
-					new_region.polygon = remaining_poly
+					new_region.polygon = simplified_poly
 					new_region.material = region.material
 					new_region.shader_material = region.shader_material
 					new_region.update_convex_pieces()
+					convex_updates += 1
 					result_regions.append(new_region)
+	
+	var clip_time = Time.get_ticks_msec() - clip_start
+	print("    [CLIP] regions_in=%d, aabb_rejected=%d, intersect_checks=%d, clip_ops=%d, convex_updates=%d, time=%dms" % [regions.size(), aabb_rejections, intersection_checks, clip_operations, convex_updates, clip_time])
 	
 	return result_regions
 
@@ -1181,9 +1270,26 @@ func check_regions_contiguous(regions: Array) -> Array[Array]:
 	"""
 	Checks if regions form contiguous groups (touching each other).
 	Returns an array of arrays, where each sub-array contains regions that are connected.
+	Optimized with AABB pre-check to avoid expensive merge operations.
 	"""
 	if regions.size() <= 1:
 		return [regions]
+	
+	# Pre-compute AABBs for all regions
+	var aabbs: Array = []
+	for region in regions:
+		var poly = region.polygon
+		if poly.size() == 0:
+			aabbs.append({"min": Vector2.ZERO, "max": Vector2.ZERO})
+			continue
+		var min_pt = poly[0]
+		var max_pt = poly[0]
+		for point in poly:
+			min_pt.x = min(min_pt.x, point.x)
+			min_pt.y = min(min_pt.y, point.y)
+			max_pt.x = max(max_pt.x, point.x)
+			max_pt.y = max(max_pt.y, point.y)
+		aabbs.append({"min": min_pt, "max": max_pt})
 	
 	# Build adjacency - two regions are adjacent if their polygons overlap or touch
 	var visited: Array[bool] = []
@@ -1206,10 +1312,21 @@ func check_regions_contiguous(regions: Array) -> Array[Array]:
 			var current_idx = queue.pop_front()
 			group.append(regions[current_idx])
 			
+			var current_aabb = aabbs[current_idx]
+			
 			# Check all other unvisited regions for adjacency
 			for other_idx in range(regions.size()):
 				if visited[other_idx]:
 					continue
+				
+				# Quick AABB rejection with small tolerance for touching
+				var other_aabb = aabbs[other_idx]
+				var tolerance = 2.0  # Small tolerance for touching edges
+				if current_aabb["max"].x + tolerance < other_aabb["min"].x or \
+				   other_aabb["max"].x + tolerance < current_aabb["min"].x or \
+				   current_aabb["max"].y + tolerance < other_aabb["min"].y or \
+				   other_aabb["max"].y + tolerance < current_aabb["min"].y:
+					continue  # AABBs don't overlap - skip expensive merge
 				
 				# Check if polygons overlap or touch (using merge - if merge produces 1 polygon, they touch)
 				var merged = Geometry2D.merge_polygons(regions[current_idx].polygon, regions[other_idx].polygon)
@@ -1224,6 +1341,10 @@ func check_regions_contiguous(regions: Array) -> Array[Array]:
 
 func rebuild_body_visuals_and_collisions(body: Node2D, regions: Array, layer: int) -> void:
 	"""Rebuilds the visual and collision children of a body based on its material regions"""
+	var rebuild_start = Time.get_ticks_msec()
+	var total_convex_pieces = 0
+	var total_vertices = 0
+	
 	# Remove existing Polygon2D and CollisionPolygon2D children
 	var children_to_remove: Array[Node] = []
 	for child in body.get_children():
@@ -1233,9 +1354,14 @@ func rebuild_body_visuals_and_collisions(body: Node2D, regions: Array, layer: in
 	for child in children_to_remove:
 		child.queue_free()
 	
+	var cleanup_time = Time.get_ticks_msec() - rebuild_start
+	var convex_decomp_time = 0
+	
 	# Create new visual and collision for each region
 	var region_index = 0
 	for region in regions:
+		total_vertices += region.polygon.size()
+		
 		# Create Polygon2D visual for this region
 		var visual_polygon = Polygon2D.new()
 		visual_polygon.polygon = region.polygon
@@ -1252,11 +1378,21 @@ func rebuild_body_visuals_and_collisions(body: Node2D, regions: Array, layer: in
 		
 		# Create CollisionPolygon2D children for this region (with convex decomposition)
 		# Each collision shape gets its own PhysicsMaterial based on the region
+		var convex_start = Time.get_ticks_msec()
 		if region.convex_pieces.size() == 0:
 			region.update_convex_pieces()
+		convex_decomp_time += Time.get_ticks_msec() - convex_start
+		
+		# Cap convex pieces to prevent performance issues
+		var pieces_to_use = region.convex_pieces
+		if pieces_to_use.size() > 24:
+			# Too many pieces - use original polygon as single collision shape
+			pieces_to_use = [region.polygon]
+		
+		total_convex_pieces += pieces_to_use.size()
 		
 		var collision_idx = 0
-		for convex_poly in region.convex_pieces:
+		for convex_poly in pieces_to_use:
 			if convex_poly.size() >= 3:
 				var collision = CollisionPolygon2D.new()
 				collision.polygon = convex_poly
@@ -1286,6 +1422,7 @@ func rebuild_body_visuals_and_collisions(body: Node2D, regions: Array, layer: in
 		region_index += 1
 	
 	# Update debug Line2D if it exists (show combined outline)
+	var line2d_start = Time.get_ticks_msec()
 	for child in body.get_children():
 		if child is Line2D and child.default_color == Color(1.0, 0.0, 0.0, 1.0):
 			child.clear_points()
@@ -1295,6 +1432,7 @@ func rebuild_body_visuals_and_collisions(body: Node2D, regions: Array, layer: in
 			if combined.size() > 0:
 				child.add_point(combined[0])
 			break
+	var line2d_time = Time.get_ticks_msec() - line2d_start
 	
 	# Update mass for RigidBody2D
 	if body is RigidBody2D:
@@ -1304,6 +1442,10 @@ func rebuild_body_visuals_and_collisions(body: Node2D, regions: Array, layer: in
 		var weighted_centroid = calculate_weighted_centroid_from_regions(regions)
 		body.center_of_mass_mode = RigidBody2D.CENTER_OF_MASS_MODE_CUSTOM
 		body.center_of_mass = weighted_centroid
+	
+	var total_rebuild_time = Time.get_ticks_msec() - rebuild_start
+	print("    [REBUILD] regions=%d, vertices=%d, convex_pieces=%d" % [regions.size(), total_vertices, total_convex_pieces])
+	print("    [REBUILD] cleanup=%dms, convex_decomp=%dms, line2d=%dms, total=%dms" % [cleanup_time, convex_decomp_time, line2d_time, total_rebuild_time])
 
 
 func merge_polygon_into_bodies(polygon: PackedVector2Array, bodies: Array) -> void:
