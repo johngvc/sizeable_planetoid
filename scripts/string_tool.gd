@@ -1,13 +1,17 @@
 extends Node2D
 ## Manages placing strings (rope-like connectors) between physics bodies
-## Strings allow inward movement but prevent stretching beyond initial length
-## Uses high stiffness force-based constraint for minimal elasticity
+## Uses the rope package for physics-based rope simulation
 
 const STRING_WIDTH: float = 2.0
 const DETECTION_RADIUS: float = 20.0
+const ROPE_PIECE_LENGTH: float = 20.0  # Length of each rope segment
+
+# Preload rope scenes
+var RopeEndPieceScene = preload("res://rope/rope_end_piece.tscn")
 
 # Track all placed strings
-var placed_strings: Array = []  # Array of { body_a, body_b, line, attach_local_a, attach_local_b, max_length }
+# Array of { body_a, body_b, line, attach_local_a, attach_local_b, rope: Rope, anchor_a, anchor_b }
+var placed_strings: Array = []
 
 # Two-click workflow state
 var pending_first_body: PhysicsBody2D = null
@@ -33,9 +37,8 @@ func _create_preview_line() -> void:
 
 
 func _physics_process(_delta: float) -> void:
-	# Apply rope constraints and update visuals
+	# Update visuals only - physics handled by joints (no manual position updates!)
 	for string_data in placed_strings:
-		_apply_rope_constraint(string_data)
 		_update_string_visual(string_data)
 	
 	# Update preview line if we have a pending first point
@@ -52,91 +55,43 @@ func _physics_process(_delta: float) -> void:
 			preview_line.visible = false
 
 
-func _apply_rope_constraint(string_data: Dictionary) -> void:
-	"""Apply rope constraint - prevents stretching beyond max_length with minimal elasticity"""
-	var body_a: PhysicsBody2D = string_data.body_a
-	var body_b: PhysicsBody2D = string_data.body_b
-	var max_length: float = string_data.max_length
-	
-	if not is_instance_valid(body_a) or not is_instance_valid(body_b):
-		return
-	
-	# Get current attachment positions
-	var global_a = body_a.to_global(string_data.attach_local_a)
-	var global_b = body_b.to_global(string_data.attach_local_b)
-	
-	# Calculate current distance
-	var delta_pos = global_b - global_a
-	var current_length = delta_pos.length()
-	
-	# Only apply constraint if stretched beyond max length
-	if current_length <= max_length:
-		return  # Within rope length, free movement allowed
-	
-	var direction = delta_pos.normalized()
-	var excess = current_length - max_length
-	
-	# Determine which bodies can move
-	var a_is_dynamic = body_a is RigidBody2D and not body_a.freeze
-	var b_is_dynamic = body_b is RigidBody2D and not body_b.freeze
-	
-	if not a_is_dynamic and not b_is_dynamic:
-		return
-	
-	# Very high stiffness for minimal stretch (like a rope, not a rubber band)
-	var stiffness = 800.0  # Strong corrective force
-	var damping = 40.0  # Strong velocity damping to prevent oscillation
-	
-	if a_is_dynamic and b_is_dynamic:
-		var total_inv_mass = (1.0 / body_a.mass) + (1.0 / body_b.mass)
-		var ratio_a = (1.0 / body_a.mass) / total_inv_mass
-		var ratio_b = (1.0 / body_b.mass) / total_inv_mass
-		
-		# Get relative velocity along rope direction
-		var rel_vel = body_b.linear_velocity - body_a.linear_velocity
-		var vel_along_rope = rel_vel.dot(direction)
-		
-		# Apply strong corrective force
-		var force_mag = excess * stiffness
-		if vel_along_rope > 0:
-			force_mag += vel_along_rope * damping * body_a.mass
-		
-		var force = direction * force_mag
-		body_a.apply_central_force(force * ratio_a)
-		body_b.apply_central_force(-force * ratio_b)
-		
-	elif a_is_dynamic:
-		var vel_along_rope = body_a.linear_velocity.dot(-direction)
-		var force_mag = excess * stiffness
-		if vel_along_rope < 0:
-			force_mag += -vel_along_rope * damping * body_a.mass
-		body_a.apply_central_force(direction * force_mag)
-		
-	else:  # b_is_dynamic
-		var vel_along_rope = body_b.linear_velocity.dot(direction)
-		var force_mag = excess * stiffness
-		if vel_along_rope > 0:
-			force_mag += vel_along_rope * damping * body_b.mass
-		body_b.apply_central_force(-direction * force_mag)
-
-
 func _update_string_visual(string_data: Dictionary) -> void:
-	"""Update a string's Line2D to follow its connected bodies"""
+	"""Update a string's Line2D to follow all rope segments"""
 	var line: Line2D = string_data.line
-	var body_a: PhysicsBody2D = string_data.body_a
-	var body_b: PhysicsBody2D = string_data.body_b
+	var rope: Rope = string_data.rope
 	
-	if not is_instance_valid(line) or not is_instance_valid(body_a) or not is_instance_valid(body_b):
+	if not is_instance_valid(line) or rope == null:
 		return
 	
-	# Convert local attachment points to global positions
-	var global_a = body_a.to_global(string_data.attach_local_a)
-	var global_b = body_b.to_global(string_data.attach_local_b)
+	# Get all rope points from the Rope class
+	var points = rope.get_points()
 	
-	# Update line points
 	line.clear_points()
-	line.add_point(global_a)
-	line.add_point(global_b)
+	for point in points:
+		line.add_point(point)
+
+
+func _create_anchor_joint(body: PhysicsBody2D, local_pos: Vector2, anchor: RopePiece) -> PinJoint2D:
+	"""Create a PinJoint2D to connect a rope anchor to a physics body"""
+	var joint = PinJoint2D.new()
+	
+	# Add joint as child of the body (so it moves with the body)
+	body.add_child(joint)
+	
+	# Position joint at the local attachment point
+	joint.position = local_pos
+	
+	# Connect body to anchor
+	joint.node_a = joint.get_path_to(body)
+	joint.node_b = joint.get_path_to(anchor)
+	
+	# Joint settings - slightly soft for stability
+	joint.softness = 0.1
+	joint.bias = 0.9
+	joint.disable_collision = true
+	
+	print("  Created anchor joint at local position: %s" % local_pos)
+	return joint
 
 
 func place_string_point(world_position: Vector2) -> void:
@@ -170,31 +125,155 @@ func place_string_point(world_position: Vector2) -> void:
 
 
 func create_string(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2D, local_b: Vector2) -> void:
-	"""Create a rope-like string connection between two bodies"""
+	"""Create a rope connection between two bodies using the Rope package"""
 	var global_a = body_a.to_global(local_a)
 	var global_b = body_b.to_global(local_b)
-	var max_length = global_a.distance_to(global_b)
+	var total_distance = global_a.distance_to(global_b)
+	
+	# Unfreeze RigidBody2D objects so rope physics can work
+	if body_a is RigidBody2D and body_a.freeze:
+		print("⚠ Unfreezing Body A for rope physics")
+		body_a.freeze = false
+	if body_b is RigidBody2D and body_b.freeze:
+		print("⚠ Unfreezing Body B for rope physics")
+		body_b.freeze = false
+	
+	# Debug: Log mass information for attached bodies
+	_log_body_info("Body A", body_a)
+	_log_body_info("Body B", body_b)
+	
+	# Calculate segment mass based on attached body mass (keep ratio under 10:1)
+	var max_body_mass = 1.0
+	if body_a is RigidBody2D:
+		max_body_mass = max(max_body_mass, body_a.mass)
+	if body_b is RigidBody2D:
+		max_body_mass = max(max_body_mass, body_b.mass)
+	var recommended_segment_mass = max(1.0, max_body_mass / 5.0)  # Keep ratio at 5:1 for stability
+	print("  Recommended segment mass: %.2f (based on max body mass %.2f)" % [recommended_segment_mass, max_body_mass])
+	
+	# Create start anchor - NOT frozen, will be constrained by joint
+	var anchor_a: RopePiece = RopeEndPieceScene.instantiate()
+	anchor_a.global_position = global_a
+	anchor_a.freeze = false
+	anchor_a.mass = recommended_segment_mass
+	anchor_a.linear_damp = 5.0
+	anchor_a.angular_damp = 5.0
+	anchor_a.collision_layer = 0  # No collisions
+	anchor_a.collision_mask = 0
+	add_child(anchor_a)
+	
+	# Create end anchor - NOT frozen, will be constrained by joint
+	var anchor_b: RopePiece = RopeEndPieceScene.instantiate()
+	anchor_b.global_position = global_b
+	anchor_b.freeze = false
+	anchor_b.mass = recommended_segment_mass
+	anchor_b.linear_damp = 5.0
+	anchor_b.angular_damp = 5.0
+	anchor_b.collision_layer = 0  # No collisions
+	anchor_b.collision_mask = 0
+	add_child(anchor_b)
+	
+	# Create the Rope instance
+	var rope = Rope.new(anchor_a, ROPE_PIECE_LENGTH)
+	add_child(rope)
+	
+	# Create the rope segments connecting anchor_a to anchor_b
+	rope.create_rope(anchor_b)
+	
+	# Adjust segment masses for stability
+	_adjust_rope_segment_masses(rope, recommended_segment_mass)
+	
+	# Connect anchors to bodies using PinJoint2D (physics-based connection, no teleportation)
+	var joint_a = _create_anchor_joint(body_a, local_a, anchor_a)
+	var joint_b = _create_anchor_joint(body_b, local_b, anchor_b)
+	
+	# Debug: Log rope segment info after creation
+	_log_rope_info(rope)
 	
 	# Create visual Line2D
 	var line = Line2D.new()
 	line.width = STRING_WIDTH
 	line.default_color = Color(0.6, 0.4, 0.2)  # Brown rope color
 	line.z_index = 10
-	line.add_point(global_a)
-	line.add_point(global_b)
 	add_child(line)
 	
-	# Track the string (using custom constraint, not a joint)
+	# Track the string with all its components
 	placed_strings.append({
 		"body_a": body_a,
 		"body_b": body_b,
 		"line": line,
 		"attach_local_a": local_a,
 		"attach_local_b": local_b,
-		"max_length": max_length
+		"rope": rope,
+		"anchor_a": anchor_a,
+		"anchor_b": anchor_b,
+		"joint_a": joint_a,
+		"joint_b": joint_b,
+		"max_length": total_distance
 	})
 	
-	print("✓ String placed connecting two objects (max length: %.1f)" % max_length)
+	print("✓ String placed using Rope package (length: %.1f)" % total_distance)
+
+
+func _log_body_info(label: String, body: PhysicsBody2D) -> void:
+	"""Log debug information about a physics body"""
+	print("=== %s ===" % label)
+	print("  Type: %s" % body.get_class())
+	print("  Name: %s" % body.name)
+	
+	if body is RigidBody2D:
+		var rb = body as RigidBody2D
+		print("  Mass: %.3f" % rb.mass)
+		print("  Inertia: %.3f" % rb.inertia)
+		print("  Gravity Scale: %.2f" % rb.gravity_scale)
+		print("  Linear Damp: %.2f" % rb.linear_damp)
+		print("  Angular Damp: %.2f" % rb.angular_damp)
+		print("  Freeze: %s" % rb.freeze)
+		print("  Linear Velocity: %s" % rb.linear_velocity)
+	elif body is StaticBody2D:
+		print("  (Static body - infinite mass)")
+	elif body is CharacterBody2D:
+		print("  (Character body)")
+	
+	print("  Collision Layer: %d" % body.collision_layer)
+	print("  Collision Mask: %d" % body.collision_mask)
+
+
+func _log_rope_info(rope: Rope) -> void:
+	"""Log debug information about rope segments"""
+	print("=== Rope Segments ===")
+	var segment_count = 0
+	var walker: RopePiece = rope.rope_start
+	while walker:
+		if walker is RigidBody2D:
+			print("  Segment %d: mass=%.3f, freeze=%s, linear_damp=%.2f" % [
+				segment_count,
+				walker.mass,
+				walker.freeze,
+				walker.linear_damp
+			])
+		segment_count += 1
+		walker = walker.next_piece
+	print("  Total segments: %d" % segment_count)
+	print("  Piece length: %.1f" % rope.piece_length)
+
+
+func _adjust_rope_segment_masses(rope: Rope, target_mass: float) -> void:
+	"""Adjust the mass of rope segments and disable collisions between them"""
+	var walker: RopePiece = rope.rope_start
+	while walker:
+		if walker is RigidBody2D:
+			# Disable all collisions for rope segments
+			walker.collision_layer = 0
+			walker.collision_mask = 0
+			
+			if not walker.freeze:
+				walker.mass = target_mass
+				# Also increase damping for heavier segments
+				walker.linear_damp = max(walker.linear_damp, 2.0)
+				walker.angular_damp = max(walker.angular_damp, 4.0)
+		walker = walker.next_piece
+	print("  Adjusted rope segment masses to: %.2f (collisions disabled)" % target_mass)
 
 
 func find_body_at_position(position: Vector2) -> PhysicsBody2D:
@@ -238,21 +317,45 @@ func remove_string_at_position(position: Vector2, threshold: float = 20.0) -> bo
 		if not is_instance_valid(string_data.body_a) or not is_instance_valid(string_data.body_b):
 			continue
 		
-		# Check distance to the line segment
+		# Check distance to the line segment (first to last point)
 		var global_a = string_data.body_a.to_global(string_data.attach_local_a)
 		var global_b = string_data.body_b.to_global(string_data.attach_local_b)
 		var distance = _point_to_segment_distance(position, global_a, global_b)
 		
 		if distance < threshold:
-			# Clean up visual
-			if is_instance_valid(string_data.line):
-				string_data.line.queue_free()
-			
+			_cleanup_string_data(string_data)
 			placed_strings.remove_at(i)
 			print("String removed")
 			return true
 	
 	return false
+
+
+func _cleanup_string_data(string_data: Dictionary) -> void:
+	"""Free all resources associated with a string"""
+	# Free the anchor joints first
+	if string_data.has("joint_a") and is_instance_valid(string_data.joint_a):
+		string_data.joint_a.queue_free()
+	if string_data.has("joint_b") and is_instance_valid(string_data.joint_b):
+		string_data.joint_b.queue_free()
+	
+	# Free the rope (which contains all segments and joints)
+	var rope: Rope = string_data.rope
+	if rope != null:
+		# Free all children of the rope (segments)
+		for child in rope.get_children():
+			child.queue_free()
+		rope.queue_free()
+	
+	# Free anchors
+	if is_instance_valid(string_data.anchor_a):
+		string_data.anchor_a.queue_free()
+	if is_instance_valid(string_data.anchor_b):
+		string_data.anchor_b.queue_free()
+	
+	# Free visual line
+	if is_instance_valid(string_data.line):
+		string_data.line.queue_free()
 
 
 func _point_to_segment_distance(point: Vector2, seg_start: Vector2, seg_end: Vector2) -> float:
@@ -276,7 +379,5 @@ func cleanup_invalid_strings() -> void:
 		var string_data = placed_strings[i]
 		
 		if not is_instance_valid(string_data.body_a) or not is_instance_valid(string_data.body_b):
-			if is_instance_valid(string_data.line):
-				string_data.line.queue_free()
-			
+			_cleanup_string_data(string_data)
 			placed_strings.remove_at(i)
