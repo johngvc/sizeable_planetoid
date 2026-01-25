@@ -19,13 +19,10 @@ func place_bolt(world_position: Vector2) -> void:
 	var layer2_body = find_body_at_position(world_position, 2)
 	
 	if layer1_body == null and layer2_body == null:
-		print("⚠ No objects found at bolt position")
 		return
 	elif layer1_body == null:
-		print("⚠ No Layer 1 (Front) object found at bolt position")
 		return
 	elif layer2_body == null:
-		print("⚠ No Layer 2 (Back) object found at bolt position")
 		return
 	
 	# Create the bolt joint - very stiff configuration
@@ -54,8 +51,6 @@ func place_bolt(world_position: Vector2) -> void:
 		"joint": pin_joint,
 		"visual": bolt_visual
 	})
-	
-	print("✓ Bolt placed connecting Layer 1 and Layer 2 objects")
 
 
 func find_body_at_position(position: Vector2, layer: int) -> PhysicsBody2D:
@@ -148,14 +143,10 @@ func remove_bolt_at_position(position: Vector2, threshold: float = 16.0) -> bool
 				bolt_data.visual.queue_free()
 			
 			placed_bolts.remove_at(i)
-			print("Bolt removed")
 			return true
 	
 	return false
 
-
-func cleanup_invalid_bolts() -> void:
-	"""Remove bolts whose connected bodies no longer exist"""
 	for i in range(placed_bolts.size() - 1, -1, -1):
 		var bolt_data = placed_bolts[i]
 		

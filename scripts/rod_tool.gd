@@ -74,7 +74,6 @@ func place_rod_point(world_position: Vector2) -> void:
 	var body = find_body_at_position(world_position)
 	
 	if body == null:
-		print("⚠ No object found at rod position")
 		cancel_pending()
 		return
 	
@@ -83,11 +82,9 @@ func place_rod_point(world_position: Vector2) -> void:
 		pending_first_body = body
 		pending_attach_local = body.to_local(world_position)
 		pending_attach_world = world_position
-		print("✓ Rod start point set - click on another object to complete")
 	else:
 		# Second click - create the rod
 		if body == pending_first_body:
-			print("⚠ Cannot connect an object to itself")
 			return
 		
 		var attach_local_b = body.to_local(world_position)
@@ -140,8 +137,6 @@ func create_rod(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2D, 
 		"attach_local_b": local_b,
 		"length": rod_length
 	})
-	
-	print("✓ Rod placed connecting two objects (length: %.1f)" % rod_length)
 
 
 func find_body_at_position(position: Vector2) -> PhysicsBody2D:
@@ -198,7 +193,6 @@ func remove_rod_at_position(position: Vector2, threshold: float = 20.0) -> bool:
 				rod_data.line.queue_free()
 			
 			placed_rods.remove_at(i)
-			print("Rod removed")
 			return true
 	
 	return false

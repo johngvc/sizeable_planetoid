@@ -557,14 +557,10 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 		return
 	
 	var start_time = Time.get_ticks_msec()
-	print("=== ERASE START ===")
-	print("Body has %d regions before erase" % regions.size())
 	
 	# Clip eraser from all regions
 	var clip_start = Time.get_ticks_msec()
 	var updated_regions = clip_regions_with_eraser(regions, local_erase_brush)
-	print("  [TIMING] clip_regions_with_eraser: %d ms" % (Time.get_ticks_msec() - clip_start))
-	print("Body has %d regions after erase" % updated_regions.size())
 	
 	# Get body properties
 	var body_layer = body.get_meta("layer", 1)
@@ -572,13 +568,11 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 	
 	if updated_regions.size() == 0:
 		# Entire body was erased
-		print("Body completely erased")
 		body.queue_free()
 		if body in existing_drawn_bodies:
 			existing_drawn_bodies.erase(body)
 		if body in existing_static_bodies:
 			existing_static_bodies.erase(body)
-		print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
 		return
 	
 	# Skip contiguity check for single region (common case - no split possible)
@@ -586,26 +580,19 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 		set_body_regions(body, updated_regions)
 		var rebuild_start = Time.get_ticks_msec()
 		rebuild_body_visuals_and_collisions(body, updated_regions, body_layer)
-		print("  [TIMING] rebuild_body_visuals_and_collisions: %d ms" % (Time.get_ticks_msec() - rebuild_start))
-		print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
 		return
 	
 	# Check if regions are still contiguous (connected)
 	var contiguous_start = Time.get_ticks_msec()
 	var contiguous_groups = check_regions_contiguous(updated_regions)
-	print("  [TIMING] check_regions_contiguous: %d ms" % (Time.get_ticks_msec() - contiguous_start))
-	print("Found %d contiguous groups" % contiguous_groups.size())
 	
 	if contiguous_groups.size() == 1:
 		# All regions still connected - update this body
 		set_body_regions(body, updated_regions)
 		var rebuild_start = Time.get_ticks_msec()
 		rebuild_body_visuals_and_collisions(body, updated_regions, body_layer)
-		print("  [TIMING] rebuild_body_visuals_and_collisions: %d ms" % (Time.get_ticks_msec() - rebuild_start))
-		print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
 	else:
 		# Regions split into multiple disconnected groups - need to create separate bodies
-		print("Splitting into %d separate bodies" % contiguous_groups.size())
 		
 		# Sort groups by total area (largest first)
 		var group_data: Array = []
@@ -635,7 +622,6 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 				# Check if group meets minimum area threshold
 				var group_area = calculate_polygon_area(combined)
 				if group_area < MIN_POLYGON_AREA:
-					print("Skipping fragment group %d - too small (area: %.2f)" % [i, group_area])
 					continue
 				
 				# Convert combined polygon to world space
@@ -711,14 +697,13 @@ func erase_from_body_polygon(body: Node2D, erase_brush: PackedVector2Array) -> v
 					existing_static_bodies.append(new_body)
 				else:
 					existing_drawn_bodies.append(new_body)
-				
-				print("Created fragment body %d with %d regions" % [i, local_regions.size()])
-		
-		print("=== ERASE COMPLETE: %d ms ===" % (Time.get_ticks_msec() - start_time))
 
 
 func start_new_polygon_preview() -> void:
-	"""Creates a Polygon2D preview for the polygon being drawn"""
+	"""Creates a new preview Polygon2D for the current polygon"""
+	if current_preview_polygon != null:
+		current_preview_polygon.queue_free()
+	
 	current_preview_polygon = Polygon2D.new()
 	current_preview_polygon.color = Color(1.0, 1.0, 1.0, 0.5)  # Semi-transparent for debugging
 	current_preview_polygon.material = current_polygon_shader
@@ -754,7 +739,6 @@ func finish_current_polygon() -> void:
 	# Check if polygon area is too small
 	var polygon_area = calculate_polygon_area(current_polygon)
 	if polygon_area < MIN_POLYGON_AREA:
-		print("Polygon too small (area: ", polygon_area, "), discarding")
 		if current_preview_polygon != null:
 			current_preview_polygon.queue_free()
 			current_preview_polygon = null
@@ -889,7 +873,6 @@ func create_physics_body_from_polygon(polygon: PackedVector2Array, material: Dra
 	# Check minimum area threshold
 	var polygon_area = calculate_polygon_area(polygon)
 	if polygon_area < MIN_POLYGON_AREA:
-		print("Skipping body creation - polygon too small (area: ", polygon_area, ")")
 		return
 	
 	# Calculate center of polygon for positioning
@@ -948,8 +931,6 @@ func create_physics_body_from_polygon(polygon: PackedVector2Array, material: Dra
 	else:  # layer 2
 		physics_body.collision_layer = 1 << LAYER_2_COLLISION_BIT  # Bit 1 = value 2
 		physics_body.collision_mask = (1 << LAYER_2_COLLISION_BIT) | (1 << GROUND_COLLISION_BIT)  # Bits 1,2 = value 6
-	
-	print("Created %s body on layer %d - collision_layer: %d collision_mask: %d" % ["static" if is_static else "dynamic", layer, physics_body.collision_layer, physics_body.collision_mask])
 	
 	# Store layer metadata
 	physics_body.set_meta("layer", layer)
@@ -1217,9 +1198,6 @@ func clip_regions_with_eraser(regions: Array, eraser_polygon: PackedVector2Array
 					convex_updates += 1
 					result_regions.append(new_region)
 	
-	var clip_time = Time.get_ticks_msec() - clip_start
-	print("    [CLIP] regions_in=%d, aabb_rejected=%d, intersect_checks=%d, clip_ops=%d, convex_updates=%d, time=%dms" % [regions.size(), aabb_rejections, intersection_checks, clip_operations, convex_updates, clip_time])
-	
 	return result_regions
 
 
@@ -1442,10 +1420,6 @@ func rebuild_body_visuals_and_collisions(body: Node2D, regions: Array, layer: in
 		var weighted_centroid = calculate_weighted_centroid_from_regions(regions)
 		body.center_of_mass_mode = RigidBody2D.CENTER_OF_MASS_MODE_CUSTOM
 		body.center_of_mass = weighted_centroid
-	
-	var total_rebuild_time = Time.get_ticks_msec() - rebuild_start
-	print("    [REBUILD] regions=%d, vertices=%d, convex_pieces=%d" % [regions.size(), total_vertices, total_convex_pieces])
-	print("    [REBUILD] cleanup=%dms, convex_decomp=%dms, line2d=%dms, total=%dms" % [cleanup_time, convex_decomp_time, line2d_time, total_rebuild_time])
 
 
 func merge_polygon_into_bodies(polygon: PackedVector2Array, bodies: Array) -> void:
@@ -1457,22 +1431,16 @@ func merge_polygon_into_bodies(polygon: PackedVector2Array, bodies: Array) -> vo
 	if bodies.size() == 0:
 		return
 	
-	print("=== MATERIAL MERGE START: %d bodies to merge ===" % bodies.size())
-	
 	# Target body is the first overlapping body - all other bodies merge into it
 	var target_body = bodies[0]
 	
 	if not is_instance_valid(target_body):
-		print("ERROR: Target body is invalid")
 		return
-	
-	print("Target body: %s" % target_body)
 	
 	var target_layer = target_body.get_meta("layer", 1)
 	
 	# Get existing regions from target body (or create from legacy single-material body)
 	var all_regions: Array = get_body_regions(target_body)
-	print("Target body has %d existing regions" % all_regions.size())
 	
 	# Convert new polygon to target body's local space
 	var local_polygon = PackedVector2Array()
@@ -1487,15 +1455,12 @@ func merge_polygon_into_bodies(polygon: PackedVector2Array, bodies: Array) -> vo
 	# Merge additional bodies' regions into our collection first
 	for i in range(1, bodies.size()):
 		var other_body = bodies[i]
-		print("Processing body %d: %s" % [i, other_body])
 		
 		if not is_instance_valid(other_body):
-			print("  - Body %d is invalid, skipping" % i)
 			continue
 		
 		# Get regions from other body
 		var other_regions = get_body_regions(other_body)
-		print("  - Body %d has %d regions" % [i, other_regions.size()])
 		
 		# Convert each region's polygon to target body's local space
 		for region in other_regions:
@@ -1509,20 +1474,15 @@ func merge_polygon_into_bodies(polygon: PackedVector2Array, bodies: Array) -> vo
 			all_regions.append(converted_region)
 		
 		# Remove the merged body
-		print("  - Queuing body %d for deletion" % i)
 		other_body.call_deferred("queue_free")
 		if other_body in existing_drawn_bodies:
 			existing_drawn_bodies.erase(other_body)
 		if other_body in existing_static_bodies:
 			existing_static_bodies.erase(other_body)
 	
-	print("Total regions before new polygon: %d" % all_regions.size())
-	
 	# Now merge the new polygon into all existing regions
 	# The new material OVERRIDES existing materials in the overlap
 	var updated_regions = merge_new_polygon_into_regions(all_regions, local_polygon, current_polygon_material, new_shader)
-	
-	print("Total regions after merge: %d" % updated_regions.size())
 	
 	# Store updated regions on the body
 	set_body_regions(target_body, updated_regions)
@@ -1533,8 +1493,6 @@ func merge_polygon_into_bodies(polygon: PackedVector2Array, bodies: Array) -> vo
 	
 	# Rebuild visuals and collisions
 	rebuild_body_visuals_and_collisions(target_body, updated_regions, target_layer)
-	
-	print("=== MATERIAL MERGE COMPLETE ===")
 
 
 func create_collision_shape_for_brush(brush_shape: String, brush_scale: float = 1.0) -> Shape2D:
@@ -1602,8 +1560,6 @@ func create_static_body_for_stroke(stroke_data: Dictionary) -> void:
 	else:  # layer 2
 		static_body.collision_layer = 1 << LAYER_2_COLLISION_BIT  # Bit 1 = value 2
 		static_body.collision_mask = (1 << LAYER_2_COLLISION_BIT) | (1 << GROUND_COLLISION_BIT)  # Bits 1,2 = value 6
-	
-	print("Created static body on layer ", body_layer, " - collision_layer: ", static_body.collision_layer, " collision_mask: ", static_body.collision_mask)
 	
 	# Store layer metadata
 	static_body.set_meta("layer", body_layer)

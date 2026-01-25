@@ -38,10 +38,6 @@ func _ready() -> void:
 func _find_draw_manager() -> void:
 	"""Find the draw_manager to check its pause state"""
 	_draw_manager = get_tree().get_first_node_in_group("draw_manager")
-	if _draw_manager:
-		print("✓ string_tool found draw_manager for pause state")
-	else:
-		print("⚠ string_tool could not find draw_manager - pause detection may not work")
 
 
 func _is_physics_paused() -> bool:
@@ -67,26 +63,13 @@ var _last_pause_state: bool = true  # Track pause state changes
 func _physics_process(_delta: float) -> void:
 	var is_paused = _is_physics_paused()
 	
-	# Debug: Log pause state changes
 	if is_paused != _last_pause_state:
-		print("🔄 Physics pause state changed: %s -> %s" % [_last_pause_state, is_paused])
-		print("   Pending unfreeze count: %d" % pending_unfreeze.size())
 		_last_pause_state = is_paused
 	
-	# Process pending unfreezes when game is running
 	if not is_paused and pending_unfreeze.size() > 0:
-		print("🔓 Processing %d pending unfreezes..." % pending_unfreeze.size())
 		for body in pending_unfreeze:
-			print("   - Body: %s, valid: %s, is RigidBody2D: %s" % [
-				body.name if is_instance_valid(body) else "INVALID",
-				is_instance_valid(body),
-				body is RigidBody2D if is_instance_valid(body) else false
-			])
 			if is_instance_valid(body) and body is RigidBody2D:
-				print("   - Before: freeze=%s" % body.freeze)
 				body.freeze = false
-				print("   - After: freeze=%s" % body.freeze)
-				print("✓ Unfroze body on unpause: %s" % body.name)
 		pending_unfreeze.clear()
 	
 	# Clean up ropes whose connected bodies were deleted
@@ -122,18 +105,14 @@ func _cleanup_invalid_ropes() -> void:
 		
 		# Check if either connected body is invalid/deleted
 		if not is_instance_valid(body_a) or not is_instance_valid(body_b):
-			print("🗑️ Rope body deleted - cleaning up rope")
 			should_delete = true
 		# Check if attachment points still exist on the bodies
 		elif not _is_attachment_point_valid(body_a, string_data.attach_local_a):
-			print("🗑️ Rope attachment point A erased - cleaning up rope")
 			should_delete = true
 		elif not _is_attachment_point_valid(body_b, string_data.attach_local_b):
-			print("🗑️ Rope attachment point B erased - cleaning up rope")
 			should_delete = true
 		# Check if rope is over-stretched (more than 10% beyond max length)
 		elif _is_rope_overstretched(string_data):
-			print("💥 Rope snapped from over-stretching - cleaning up rope")
 			should_delete = true
 		
 		if should_delete:
@@ -163,22 +142,8 @@ func _is_rope_overstretched(string_data: Dictionary) -> bool:
 	# Snap at 50% beyond the initial constraint distance
 	var snap_threshold = initial_distance * 1.50
 	
-	# Debug logging
-	var distance_change = current_distance - initial_distance
-	var distance_change_percent = (distance_change / initial_distance) * 100.0
-	
-	print("📏 Rope distance check:")
-	print("   Initial distance: %.1f" % initial_distance)
-	print("   Current distance: %.1f" % current_distance)
-	print("   Distance change: %.1f (%.1f%%)" % [distance_change, distance_change_percent])
-	print("   Snap threshold: %.1f" % snap_threshold)
-	print("   Stretched beyond initial: %s" % (current_distance > initial_distance))
-	print("   Beyond snap threshold: %s" % (current_distance > snap_threshold))
-	
 	# Only break if current distance is greater than initial AND greater than snap threshold
 	var should_snap = current_distance > initial_distance and current_distance > snap_threshold
-	if should_snap:
-		print("💥 ROPE WILL SNAP!")
 	
 	return should_snap
 
@@ -293,7 +258,6 @@ func _create_anchor_joint(body: PhysicsBody2D, local_pos: Vector2, anchor: RopeP
 	joint.bias = 0.9
 	joint.disable_collision = true
 	
-	print("  Created anchor joint at local position: %s" % local_pos)
 	return joint
 
 
@@ -302,7 +266,6 @@ func place_string_point(world_position: Vector2) -> void:
 	var body = find_body_at_position(world_position)
 	
 	if body == null:
-		print("⚠ No object found at string position")
 		cancel_pending()
 		return
 	
@@ -311,11 +274,9 @@ func place_string_point(world_position: Vector2) -> void:
 		pending_first_body = body
 		pending_attach_local = body.to_local(world_position)
 		pending_attach_world = world_position
-		print("✓ String start point set - click on another object to complete")
 	else:
 		# Second click - create the string
 		if body == pending_first_body:
-			print("⚠ Cannot connect an object to itself")
 			return
 		
 		var attach_local_b = body.to_local(world_position)
@@ -334,37 +295,24 @@ func create_string(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2
 	var total_distance = global_a.distance_to(global_b)
 	
 	var is_paused = _is_physics_paused()
-	print("🔍 create_string called - is_physics_paused: %s (draw_manager found: %s)" % [is_paused, _draw_manager != null])
 	
 	# Unfreeze RigidBody2D objects so rope physics can work
 	# If paused, defer unfreezing until game unpauses
 	if body_a is RigidBody2D:
-		print("   Body A is RigidBody2D, freeze=%s" % body_a.freeze)
 		if body_a.freeze:
 			if is_paused:
-				print("⏸ Deferring unfreeze of Body A until unpause")
 				if body_a not in pending_unfreeze:
 					pending_unfreeze.append(body_a)
-					print("   Added to pending_unfreeze (now %d items)" % pending_unfreeze.size())
 			else:
-				print("⚠ Unfreezing Body A for rope physics")
 				body_a.freeze = false
 			
 	if body_b is RigidBody2D:
-		print("   Body B is RigidBody2D, freeze=%s" % body_b.freeze)
 		if body_b.freeze:
 			if is_paused:
-				print("⏸ Deferring unfreeze of Body B until unpause")
 				if body_b not in pending_unfreeze:
 					pending_unfreeze.append(body_b)
-					print("   Added to pending_unfreeze (now %d items)" % pending_unfreeze.size())
 			else:
-				print("⚠ Unfreezing Body B for rope physics")
 				body_b.freeze = false
-	
-	# Debug: Log mass information for attached bodies
-	_log_body_info("Body A", body_a)
-	_log_body_info("Body B", body_b)
 	
 	# Calculate segment mass based on attached body mass (keep ratio under 10:1)
 	var max_body_mass = 1.0
@@ -373,7 +321,6 @@ func create_string(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2
 	if body_b is RigidBody2D:
 		max_body_mass = max(max_body_mass, body_b.mass)
 	var recommended_segment_mass = max(1.0, max_body_mass / 5.0)  # Keep ratio at 5:1 for stability
-	print("  Recommended segment mass: %.2f (based on max body mass %.2f)" % [recommended_segment_mass, max_body_mass])
 	
 	# Create start anchor - freeze if physics is paused
 	var anchor_a: RopePiece = RopeEndPieceScene.instantiate()
@@ -391,7 +338,6 @@ func create_string(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2
 	add_child(anchor_a)
 	if is_paused:
 		pending_unfreeze.append(anchor_a)
-		print("⏸ Anchor A created frozen (will unfreeze on unpause)")
 	
 	# Create end anchor - freeze if physics is paused
 	var anchor_b: RopePiece = RopeEndPieceScene.instantiate()
@@ -409,7 +355,6 @@ func create_string(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2
 	add_child(anchor_b)
 	if is_paused:
 		pending_unfreeze.append(anchor_b)
-		print("⏸ Anchor B created frozen (will unfreeze on unpause)")
 	
 	# Create the Rope instance
 	var rope = Rope.new(anchor_a, ROPE_PIECE_LENGTH)
@@ -425,9 +370,6 @@ func create_string(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2
 	# Connect anchors to bodies using PinJoint2D (physics-based connection, no teleportation)
 	var joint_a = _create_anchor_joint(body_a, local_a, anchor_a)
 	var joint_b = _create_anchor_joint(body_b, local_b, anchor_b)
-	
-	# Debug: Log rope segment info after creation
-	_log_rope_info(rope)
 	
 	# Create visual Line2D
 	var line = Line2D.new()
@@ -450,57 +392,11 @@ func create_string(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2
 		"joint_b": joint_b,
 		"max_length": total_distance
 	})
-	
-	print("✓ String placed using Rope package (length: %.1f)" % total_distance)
-
-
-func _log_body_info(label: String, body: PhysicsBody2D) -> void:
-	"""Log debug information about a physics body"""
-	print("=== %s ===" % label)
-	print("  Type: %s" % body.get_class())
-	print("  Name: %s" % body.name)
-	
-	if body is RigidBody2D:
-		var rb = body as RigidBody2D
-		print("  Mass: %.3f" % rb.mass)
-		print("  Inertia: %.3f" % rb.inertia)
-		print("  Gravity Scale: %.2f" % rb.gravity_scale)
-		print("  Linear Damp: %.2f" % rb.linear_damp)
-		print("  Angular Damp: %.2f" % rb.angular_damp)
-		print("  Freeze: %s" % rb.freeze)
-		print("  Linear Velocity: %s" % rb.linear_velocity)
-	elif body is StaticBody2D:
-		print("  (Static body - infinite mass)")
-	elif body is CharacterBody2D:
-		print("  (Character body)")
-	
-	print("  Collision Layer: %d" % body.collision_layer)
-	print("  Collision Mask: %d" % body.collision_mask)
-
-
-func _log_rope_info(rope: Rope) -> void:
-	"""Log debug information about rope segments"""
-	print("=== Rope Segments ===")
-	var segment_count = 0
-	var walker: RopePiece = rope.rope_start
-	while walker:
-		if walker is RigidBody2D:
-			print("  Segment %d: mass=%.3f, freeze=%s, linear_damp=%.2f" % [
-				segment_count,
-				walker.mass,
-				walker.freeze,
-				walker.linear_damp
-			])
-		segment_count += 1
-		walker = walker.next_piece
-	print("  Total segments: %d" % segment_count)
-	print("  Piece length: %.1f" % rope.piece_length)
 
 
 func _adjust_rope_segment_masses(rope: Rope, target_mass: float, freeze_if_paused: bool = false) -> void:
 	"""Adjust the mass of rope segments and disable collisions between them"""
 	var walker: RopePiece = rope.rope_start
-	var segment_count = 0
 	while walker:
 		if walker is RigidBody2D:
 			# Disable all collisions for rope segments
@@ -524,24 +420,13 @@ func _adjust_rope_segment_masses(rope: Rope, target_mass: float, freeze_if_pause
 				walker.freeze = true
 				if walker not in pending_unfreeze:
 					pending_unfreeze.append(walker)
-				segment_count += 1
 		walker = walker.next_piece
-	
-	if freeze_if_paused:
-		print("  Adjusted rope segment masses to: %.2f (collisions disabled, %d segments frozen)" % [target_mass, segment_count])
-	else:
-		print("  Adjusted rope segment masses to: %.2f (collisions disabled)" % target_mass)
 
 
 func find_body_at_position(position: Vector2) -> PhysicsBody2D:
 	"""Find any physics body at the given position"""
 	var space_state = get_world_2d().direct_space_state
 	var query = PhysicsShapeQueryParameters2D.new()
-	
-	# Create a small circle for detection
-	var shape = CircleShape2D.new()
-	shape.radius = DETECTION_RADIUS
-	query.shape = shape
 	query.transform = Transform2D(0, position)
 	
 	# Check all collision layers (enable all 32 bits)
@@ -582,7 +467,6 @@ func remove_string_at_position(position: Vector2, threshold: float = 20.0) -> bo
 		if distance < threshold:
 			_cleanup_string_data(string_data)
 			placed_strings.remove_at(i)
-			print("String removed")
 			return true
 	
 	return false

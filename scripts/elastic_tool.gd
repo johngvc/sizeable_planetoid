@@ -144,7 +144,6 @@ func place_elastic_point(world_position: Vector2) -> void:
 	var body = find_body_at_position(world_position)
 	
 	if body == null:
-		print("⚠ No object found at elastic position")
 		cancel_pending()
 		return
 	
@@ -153,11 +152,9 @@ func place_elastic_point(world_position: Vector2) -> void:
 		pending_first_body = body
 		pending_attach_local = body.to_local(world_position)
 		pending_attach_world = world_position
-		print("✓ Elastic start point set - click on another object to complete")
 	else:
 		# Second click - create the elastic
 		if body == pending_first_body:
-			print("⚠ Cannot connect an object to itself")
 			return
 		
 		var attach_local_b = body.to_local(world_position)
@@ -193,8 +190,6 @@ func create_elastic(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody
 		"attach_local_b": local_b,
 		"max_length": max_length
 	})
-	
-	print("✓ Elastic placed connecting two objects (rest length: %.1f)" % max_length)
 
 
 func find_body_at_position(position: Vector2) -> PhysicsBody2D:
@@ -249,11 +244,9 @@ func remove_elastic_at_position(position: Vector2, threshold: float = 20.0) -> b
 				elastic_data.line.queue_free()
 			
 			placed_elastics.remove_at(i)
-			print("Elastic removed")
 			return true
 	
 	return false
-
 
 func _point_to_segment_distance(point: Vector2, seg_start: Vector2, seg_end: Vector2) -> float:
 	"""Calculate shortest distance from a point to a line segment"""

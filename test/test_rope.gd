@@ -54,7 +54,6 @@ func _process(delta: float) -> void:
 		gate -= delta
 	if Input.is_action_pressed("ui_down") and gate <= 0:
 		gate = 2.0
-		print("Growing rope")
 		grow_rope.spool(5)
 	if Input.is_action_pressed("ui_left") and grow_rope and not rope_drawer:
 		rope_drawer = RopeDrawSimpleLine.new(grow_rope)
