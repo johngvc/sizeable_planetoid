@@ -921,9 +921,9 @@ func create_physics_body_from_polygon(polygon: PackedVector2Array, material: Dra
 		# Enable continuous collision detection for stability
 		physics_body.continuous_cd = RigidBody2D.CCD_MODE_CAST_SHAPE
 		
-		# Add damping to reduce excessive motion
-		physics_body.linear_damp = 0.5  # Slow down linear motion
-		physics_body.angular_damp = 2.0  # Reduce spinning significantly
+		# Minimal damping for more free movement
+		physics_body.linear_damp = 0.1  # Slight resistance to linear motion
+		physics_body.angular_damp = 0.5  # Slight resistance to spinning
 		
 		# Adjust sleep settings for better stability
 		physics_body.can_sleep = true
