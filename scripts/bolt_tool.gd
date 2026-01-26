@@ -1,15 +1,145 @@
 extends Node2D
 ## Manages placing bolts that connect Layer 1 and Layer 2 objects
+## Bolts are very stiff connections that snap when over-tensioned
 
 const BOLT_VISUAL_RADIUS: float = 4.0
 const DETECTION_RADIUS: float = 20.0  # How close to stroke we need to click
 
+# Snapping configuration
+const MAX_TENSION_DISTANCE: float = 10.0  # Maximum stretch before bolt snaps (in pixels)
+const STRESS_WARNING_DISTANCE: float = 5.0  # Distance at which bolt shows stress (turns red)
+
 # Track all placed bolts
-var placed_bolts: Array = []  # Array of { position: Vector2, layer1_body: PhysicsBody2D, layer2_body: PhysicsBody2D, joint: PinJoint2D, visual: Node2D }
+# Each bolt stores: position, layer1_body, layer2_body, joint, visual, 
+#                   local_anchor1 (position in layer1_body local coords),
+#                   local_anchor2 (position in layer2_body local coords)
+var placed_bolts: Array = []
 
 
 func _ready() -> void:
 	add_to_group("bolt_tool")
+
+
+func _physics_process(_delta: float) -> void:
+	"""Monitor bolt tension and snap bolts that are over-stressed"""
+	# Iterate backwards so we can safely remove snapped bolts
+	for i in range(placed_bolts.size() - 1, -1, -1):
+		var bolt_data = placed_bolts[i]
+		
+		# Skip if bodies are no longer valid
+		if not is_instance_valid(bolt_data.layer1_body) or not is_instance_valid(bolt_data.layer2_body):
+			snap_bolt(i, true)  # Clean up invalid bolts silently
+			continue
+		
+		# Calculate current tension (distance between anchor points in world space)
+		var world_anchor1 = bolt_data.layer1_body.to_global(bolt_data.local_anchor1)
+		var world_anchor2 = bolt_data.layer2_body.to_global(bolt_data.local_anchor2)
+		var tension_distance = world_anchor1.distance_to(world_anchor2)
+		
+		# Update visual stress indicator
+		update_bolt_stress_visual(bolt_data, tension_distance)
+		
+		# Check if bolt should snap
+		if tension_distance > MAX_TENSION_DISTANCE:
+			snap_bolt(i, false)
+
+
+func snap_bolt(index: int, silent: bool = false) -> void:
+	"""Snap (break) a bolt at the given index"""
+	if index < 0 or index >= placed_bolts.size():
+		return
+	
+	var bolt_data = placed_bolts[index]
+	
+	# Create snap effect if not silent
+	if not silent and is_instance_valid(bolt_data.joint):
+		create_snap_effect(bolt_data.joint.global_position)
+	
+	# Clean up joint and visual
+	if is_instance_valid(bolt_data.joint):
+		bolt_data.joint.queue_free()
+	if is_instance_valid(bolt_data.visual):
+		bolt_data.visual.queue_free()
+	
+	placed_bolts.remove_at(index)
+
+
+func create_snap_effect(snap_position: Vector2) -> void:
+	"""Create a visual effect when a bolt snaps"""
+	# Create particle burst effect
+	var effect = Node2D.new()
+	effect.global_position = snap_position
+	effect.z_index = 25
+	get_parent().add_child(effect)
+	
+	# Create expanding ring
+	var ring = Line2D.new()
+	ring.width = 3.0
+	ring.default_color = Color(1.0, 0.3, 0.0, 1.0)  # Orange
+	var ring_points = PackedVector2Array()
+	var segments = 16
+	for j in range(segments + 1):
+		var angle = (j / float(segments)) * TAU
+		ring_points.append(Vector2(cos(angle), sin(angle)) * BOLT_VISUAL_RADIUS)
+	ring.points = ring_points
+	effect.add_child(ring)
+	
+	# Create debris particles (small squares flying outward)
+	for k in range(6):
+		var debris = Polygon2D.new()
+		debris.polygon = PackedVector2Array([
+			Vector2(-2, -2), Vector2(2, -2), Vector2(2, 2), Vector2(-2, 2)
+		])
+		debris.color = Color(0.4, 0.4, 0.4)
+		var angle = (k / 6.0) * TAU + randf() * 0.5
+		debris.position = Vector2(cos(angle), sin(angle)) * 5.0
+		debris.set_meta("velocity", Vector2(cos(angle), sin(angle)) * (100.0 + randf() * 50.0))
+		debris.set_meta("rotation_speed", randf_range(-10.0, 10.0))
+		effect.add_child(debris)
+	
+	# Animate and clean up using a tween
+	var tween = create_tween()
+	tween.set_parallel(true)
+	
+	# Expand and fade the ring
+	tween.tween_property(ring, "scale", Vector2(8.0, 8.0), 0.3)
+	tween.tween_property(ring, "modulate:a", 0.0, 0.3)
+	
+	# Animate debris
+	for child in effect.get_children():
+		if child is Polygon2D and child.has_meta("velocity"):
+			var velocity = child.get_meta("velocity")
+			var rot_speed = child.get_meta("rotation_speed")
+			tween.tween_property(child, "position", child.position + velocity * 0.3, 0.3)
+			tween.tween_property(child, "rotation", rot_speed * 0.3, 0.3)
+			tween.tween_property(child, "modulate:a", 0.0, 0.3)
+	
+	# Clean up after animation
+	tween.chain().tween_callback(effect.queue_free)
+
+
+func update_bolt_stress_visual(bolt_data: Dictionary, tension_distance: float) -> void:
+	"""Update the bolt visual to show stress level"""
+	if not is_instance_valid(bolt_data.visual):
+		return
+	
+	var stress_ratio = tension_distance / MAX_TENSION_DISTANCE
+	
+	# Color transitions from gray (no stress) to orange (warning) to red (critical)
+	var stress_color: Color
+	if stress_ratio < STRESS_WARNING_DISTANCE / MAX_TENSION_DISTANCE:
+		# Low stress - normal gray
+		stress_color = Color(1.0, 1.0, 1.0, 1.0)  # White modulate (original colors)
+	elif stress_ratio < 0.8:
+		# Medium stress - transition to orange
+		var t = (stress_ratio - STRESS_WARNING_DISTANCE / MAX_TENSION_DISTANCE) / (0.8 - STRESS_WARNING_DISTANCE / MAX_TENSION_DISTANCE)
+		stress_color = Color(1.0, 1.0 - t * 0.5, 1.0 - t, 1.0)
+	else:
+		# High stress - transition to red with pulsing
+		var pulse = (sin(Time.get_ticks_msec() * 0.02) + 1.0) * 0.5
+		stress_color = Color(1.0, 0.2 + pulse * 0.3, 0.0, 1.0)
+	
+	bolt_data.visual.modulate = stress_color
 
 
 func place_bolt(world_position: Vector2) -> void:
@@ -25,9 +155,13 @@ func place_bolt(world_position: Vector2) -> void:
 	elif layer2_body == null:
 		return
 	
+	# Store local anchor positions for tension calculation
+	var local_anchor1 = layer1_body.to_local(world_position)
+	var local_anchor2 = layer2_body.to_local(world_position)
+	
 	# Create the bolt joint - very stiff configuration
 	var pin_joint = PinJoint2D.new()
-	pin_joint.position = layer1_body.to_local(world_position)
+	pin_joint.position = local_anchor1
 	
 	# Add joint as child of layer1_body
 	layer1_body.add_child(pin_joint)
@@ -36,20 +170,22 @@ func place_bolt(world_position: Vector2) -> void:
 	pin_joint.node_a = pin_joint.get_path_to(layer1_body)
 	pin_joint.node_b = pin_joint.get_path_to(layer2_body)
 	pin_joint.softness = 0.0  # Maximum stiffness (0.0 = completely rigid)
-	pin_joint.bias = 0.9  # High bias for strong constraint correction
+	pin_joint.bias = 0.95  # Very high bias for maximum constraint correction
 	pin_joint.disable_collision = true  # Disable collision to prevent joint instability
 	
 	# Create visual representation attached to the joint
 	var bolt_visual = create_bolt_visual(Vector2.ZERO)  # Position relative to joint
 	pin_joint.add_child(bolt_visual)
 	
-	# Track the bolt
+	# Track the bolt with anchor positions for tension monitoring
 	placed_bolts.append({
 		"position": world_position,
 		"layer1_body": layer1_body,
 		"layer2_body": layer2_body,
 		"joint": pin_joint,
-		"visual": bolt_visual
+		"visual": bolt_visual,
+		"local_anchor1": local_anchor1,
+		"local_anchor2": local_anchor2
 	})
 
 
@@ -146,14 +282,3 @@ func remove_bolt_at_position(position: Vector2, threshold: float = 16.0) -> bool
 			return true
 	
 	return false
-
-	for i in range(placed_bolts.size() - 1, -1, -1):
-		var bolt_data = placed_bolts[i]
-		
-		if not is_instance_valid(bolt_data.layer1_body) or not is_instance_valid(bolt_data.layer2_body):
-			if is_instance_valid(bolt_data.joint):
-				bolt_data.joint.queue_free()
-			if is_instance_valid(bolt_data.visual):
-				bolt_data.visual.queue_free()
-			
-			placed_bolts.remove_at(i)
