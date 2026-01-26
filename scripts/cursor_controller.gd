@@ -40,16 +40,26 @@ func _ready() -> void:
 	# Connect to cursor mode UI for brush shape and tool changes
 	var cursor_ui = get_tree().get_first_node_in_group("cursor_mode_ui")
 	if cursor_ui:
-		cursor_ui.brush_shape_changed.connect(_on_brush_shape_changed)
+		cursor_ui.draw_settings_changed.connect(_on_draw_settings_changed)
+		cursor_ui.erase_settings_changed.connect(_on_erase_settings_changed)
 		cursor_ui.tool_changed.connect(_on_tool_changed)
 		# Get initial values
 		current_brush_shape = cursor_ui.get_current_brush_shape()
 		current_tool = cursor_ui.get_current_tool()
 
 
-func _on_brush_shape_changed(shape: String) -> void:
-	current_brush_shape = shape
-	queue_redraw()
+func _on_draw_settings_changed(settings: Dictionary) -> void:
+	if current_tool == "draw_dynamic" or current_tool == "draw_static":
+		current_brush_shape = settings.get("brush_shape", "circle")
+		brush_preview_size = settings.get("brush_size", 16.0)
+		queue_redraw()
+
+
+func _on_erase_settings_changed(settings: Dictionary) -> void:
+	if current_tool == "eraser":
+		current_brush_shape = settings.get("brush_shape", "circle")
+		brush_preview_size = settings.get("brush_size", 16.0)
+		queue_redraw()
 
 
 func _on_tool_changed(tool_name: String) -> void:
@@ -60,6 +70,12 @@ func _on_tool_changed(tool_name: String) -> void:
 	if is_toolbox != is_toolbox_mode:
 		is_toolbox_mode = is_toolbox
 		toolbox_mode_changed.emit(is_toolbox_mode)
+	
+	# Update brush size from UI when switching tools
+	var cursor_ui = get_tree().get_first_node_in_group("cursor_mode_ui")
+	if cursor_ui:
+		brush_preview_size = cursor_ui.get_current_brush_size()
+		current_brush_shape = cursor_ui.get_current_brush_shape()
 	
 	queue_redraw()
 
@@ -199,20 +215,28 @@ func _draw() -> void:
 		# Draw outline for visibility
 		draw_arc(Vector2.ZERO, cursor_radius, 0, TAU, 32, Color.WHITE, 2.0)
 		
-		# Draw brush shape preview when in draw mode
-		if is_drawing_tool():
+		# Draw brush shape preview when in draw or erase mode
+		if is_brush_tool():
 			var half_size = brush_preview_size / 2.0
+			var preview_color = brush_preview_color
+			var outline_color = Color(1.0, 1.0, 1.0, 0.5)
+			
+			# Use red tint for eraser
+			if current_tool == "eraser":
+				preview_color = Color(1.0, 0.3, 0.3, 0.3)
+				outline_color = Color(1.0, 0.5, 0.5, 0.7)
+			
 			if current_brush_shape == "circle":
-				draw_circle(Vector2.ZERO, half_size, brush_preview_color)
-				draw_arc(Vector2.ZERO, half_size, 0, TAU, 32, Color(1.0, 1.0, 1.0, 0.5), 1.0)
+				draw_circle(Vector2.ZERO, half_size, preview_color)
+				draw_arc(Vector2.ZERO, half_size, 0, TAU, 32, outline_color, 1.0)
 			elif current_brush_shape == "square":
 				var rect = Rect2(-half_size, -half_size, brush_preview_size, brush_preview_size)
-				draw_rect(rect, brush_preview_color)
-				draw_rect(rect, Color(1.0, 1.0, 1.0, 0.5), false, 1.0)
+				draw_rect(rect, preview_color)
+				draw_rect(rect, outline_color, false, 1.0)
 
 
-func is_drawing_tool() -> bool:
-	return current_tool == "draw_dynamic" or current_tool == "draw_static"
+func is_brush_tool() -> bool:
+	return current_tool == "draw_dynamic" or current_tool == "draw_static" or current_tool == "eraser"
 
 
 func is_cursor_active() -> bool:

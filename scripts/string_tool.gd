@@ -427,6 +427,11 @@ func find_body_at_position(position: Vector2) -> PhysicsBody2D:
 	"""Find any physics body at the given position"""
 	var space_state = get_world_2d().direct_space_state
 	var query = PhysicsShapeQueryParameters2D.new()
+	
+	# Create a small circle shape for detection
+	var circle = CircleShape2D.new()
+	circle.radius = DETECTION_RADIUS
+	query.shape = circle
 	query.transform = Transform2D(0, position)
 	
 	# Check all collision layers (enable all 32 bits)

@@ -1,11 +1,17 @@
 extends Node2D
 ## Manages selecting and moving physics objects and brush strokes with the cursor
 
+# Signal emitted when Q key cycles transform mode (for UI sync)
+signal transform_mode_cycled(mode_name: String)
+
 const SELECTION_RADIUS: float = 20.0
 
 # Transform mode enum
 enum TransformMode { MOVE, RESIZE, ROTATE }
 var current_transform_mode: TransformMode = TransformMode.MOVE
+
+# Layer for selection (per-tool setting)
+var current_layer: int = 1
 
 # Sensitivity settings (lower = less sensitive for fine control)
 const MOVE_SENSITIVITY: float = 0.5
@@ -103,11 +109,16 @@ var highlight_color: Color = Color(0.2, 0.8, 0.2, 0.5)
 
 
 func _ready() -> void:
+	# Add to group so UI can find us
+	add_to_group("select_move_manager")
+	
 	# Find cursor mode UI and connect to tool changes
 	await get_tree().process_frame
 	var cursor_ui = get_tree().get_first_node_in_group("cursor_mode_ui")
 	if cursor_ui:
 		cursor_ui.tool_changed.connect(_on_tool_changed)
+		cursor_ui.transform_mode_changed.connect(_on_transform_mode_changed)
+		cursor_ui.select_settings_changed.connect(_on_select_settings_changed)
 	
 	var cursor = get_tree().get_first_node_in_group("cursor")
 	if cursor:
@@ -234,6 +245,9 @@ func cycle_transform_mode() -> void:
 	if cursor_ui and cursor_ui.has_method("update_transform_mode_label"):
 		cursor_ui.update_transform_mode_label(get_mode_name())
 	
+	# Emit signal for UI to sync button states
+	transform_mode_cycled.emit(get_mode_name())
+	
 	queue_redraw()
 
 
@@ -246,6 +260,23 @@ func get_mode_name() -> String:
 		TransformMode.ROTATE:
 			return "Rotate"
 	return "Unknown"
+
+
+func _on_transform_mode_changed(mode: String) -> void:
+	# Called when UI changes transform mode via radio buttons
+	match mode.to_lower():
+		"move":
+			current_transform_mode = TransformMode.MOVE
+		"resize":
+			current_transform_mode = TransformMode.RESIZE
+		"rotate":
+			current_transform_mode = TransformMode.ROTATE
+	queue_redraw()
+
+
+func _on_select_settings_changed(settings: Dictionary) -> void:
+	# Update layer from select settings
+	current_layer = settings.get("layer", 1)
 
 
 func _process(_delta: float) -> void:
@@ -347,7 +378,19 @@ func start_dragging_body(body: PhysicsBody2D, cursor_pos: Vector2) -> void:
 	# Store original collision shape sizes and visual sizes for proper resizing
 	original_collision_shapes.clear()
 	for child in body.get_children():
-		if child is CollisionShape2D:
+		if child is CollisionPolygon2D:
+			original_collision_shapes[child] = {
+				"type": "collision_polygon",
+				"polygon": child.polygon.duplicate(),
+				"position": child.position
+			}
+		elif child is Polygon2D:
+			original_collision_shapes[child] = {
+				"type": "polygon2d",
+				"polygon": child.polygon.duplicate(),
+				"position": child.position
+			}
+		elif child is CollisionShape2D:
 			if child.shape is CircleShape2D:
 				original_collision_shapes[child] = {
 					"type": "circle",
@@ -439,7 +482,25 @@ func apply_transform_to_body(cursor_pos: Vector2, mouse_delta: Vector2) -> void:
 					continue
 				var data = original_collision_shapes[child]
 				
-				if child is CollisionShape2D:
+				if child is CollisionPolygon2D:
+					# Scale polygon points
+					var orig_polygon = data["polygon"]
+					var new_polygon = PackedVector2Array()
+					for point in orig_polygon:
+						new_polygon.append(point * scale_factor)
+					child.polygon = new_polygon
+					child.position = data["position"] * scale_factor
+				
+				elif child is Polygon2D:
+					# Scale polygon points
+					var orig_polygon = data["polygon"]
+					var new_polygon = PackedVector2Array()
+					for point in orig_polygon:
+						new_polygon.append(point * scale_factor)
+					child.polygon = new_polygon
+					child.position = data["position"] * scale_factor
+				
+				elif child is CollisionShape2D:
 					# Scale position relative to body center
 					child.position = data["position"] * scale_factor
 					

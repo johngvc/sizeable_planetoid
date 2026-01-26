@@ -4,7 +4,7 @@ extends Node2D
 ## Polygons stored as PackedVector2Array and converted to RigidBody2D with Polygon2D and CollisionPolygon2D
 ## Supports multi-material bodies where each region retains its own physics properties
 
-const DRAW_SIZE: float = 16.0  # Size/width of the brush stroke (radius for circle, half-size for square)
+var draw_size: float = 16.0  # Size/width of the brush stroke (radius for circle, half-size for square)
 const MIN_DRAW_DISTANCE: float = 4.0  # Distance threshold before applying merge (5% of brush diameter)
 const MERGE_DISTANCE: float = 12.0  # Distance threshold for merging objects (deprecated - will use polygon overlap instead)
 const MIN_POLYGON_AREA: float = 100.0  # Minimum area (in pixels²) for a polygon to be kept - filters out tiny fragments
@@ -83,14 +83,15 @@ func _ready() -> void:
 		cursor_ui.tool_changed.connect(_on_tool_changed)
 		cursor_ui.material_changed.connect(_on_material_changed)
 		cursor_ui.physics_paused.connect(_on_physics_paused)
-		cursor_ui.brush_shape_changed.connect(_on_brush_shape_changed)
-		cursor_ui.layer_changed.connect(_on_layer_changed)
-		cursor_ui.show_other_layers_changed.connect(_on_show_other_layers_changed)
+		# Connect to per-tool settings signals
+		cursor_ui.draw_settings_changed.connect(_on_draw_settings_changed)
+		cursor_ui.erase_settings_changed.connect(_on_erase_settings_changed)
 		# Get initial values
 		if cursor_ui.get_current_material() != null:
 			_on_material_changed(cursor_ui.get_current_material())
 		current_brush_shape = cursor_ui.get_current_brush_shape()
 		current_layer = cursor_ui.get_current_layer()
+		draw_size = cursor_ui.get_current_brush_size()
 
 
 func _on_physics_paused(paused: bool) -> void:
@@ -146,18 +147,30 @@ func _on_material_changed(material: DrawMaterial) -> void:
 	current_draw_material = material
 
 
-func _on_brush_shape_changed(shape: String) -> void:
-	current_brush_shape = shape
+func _on_draw_settings_changed(settings: Dictionary) -> void:
+	# Only apply draw settings when draw tool is active
+	if is_draw_tool_active:
+		current_brush_shape = settings.get("brush_shape", "circle")
+		draw_size = settings.get("brush_size", 16.0)
+		var new_layer = settings.get("layer", 1)
+		if new_layer != current_layer:
+			current_layer = new_layer
+			update_layer_visibility()
+		var new_show_other = settings.get("show_other_layers", true)
+		if new_show_other != show_other_layers:
+			show_other_layers = new_show_other
+			update_layer_visibility()
 
 
-func _on_layer_changed(layer_number: int) -> void:
-	current_layer = layer_number
-	update_layer_visibility()
-
-
-func _on_show_other_layers_changed(show_layers: bool) -> void:
-	show_other_layers = show_layers
-	update_layer_visibility()
+func _on_erase_settings_changed(settings: Dictionary) -> void:
+	# Only apply erase settings when eraser tool is active
+	if is_eraser_tool_active:
+		current_brush_shape = settings.get("brush_shape", "circle")
+		draw_size = settings.get("brush_size", 16.0)
+		var new_layer = settings.get("layer", 1)
+		if new_layer != current_layer:
+			current_layer = new_layer
+			update_layer_visibility()
 
 
 func update_layer_visibility() -> void:
@@ -253,7 +266,7 @@ func _on_tool_changed(tool_name: String) -> void:
 func create_brush_polygon(center: Vector2, brush_shape: String) -> PackedVector2Array:
 	"""Creates a brush polygon (circle or square) at the given position"""
 	var polygon = PackedVector2Array()
-	var radius = DRAW_SIZE / 2.0
+	var radius = draw_size / 2.0
 	
 	if brush_shape == "square":
 		# Create axis-aligned square
@@ -417,12 +430,12 @@ func _process(_delta: float) -> void:
 		else:
 			# Continue drawing current polygon
 			var distance_since_last_merge = draw_pos.distance_to(last_merge_position)
-			var merge_threshold = DRAW_SIZE * 0.15  # 15% of brush diameter for ultra-smooth strokes
+			var merge_threshold = draw_size * 0.15  # 15% of brush diameter for ultra-smooth strokes
 			
 			if distance_since_last_merge >= merge_threshold:
 				# Calculate how many steps needed to ensure continuous coverage
 				# Use brush diameter * 0.35 as max step for maximum overlap and smoothness
-				var max_step = DRAW_SIZE * 0.35
+				var max_step = draw_size * 0.35
 				var steps = max(1, int(ceil(distance_since_last_merge / max_step)))
 				
 				# Interpolate and merge at each step to prevent gaps
@@ -1497,7 +1510,7 @@ func merge_polygon_into_bodies(polygon: PackedVector2Array, bodies: Array) -> vo
 
 func create_collision_shape_for_brush(brush_shape: String, brush_scale: float = 1.0) -> Shape2D:
 	## Creates the appropriate collision shape based on brush type
-	var scaled_size = DRAW_SIZE * brush_scale
+	var scaled_size = draw_size * brush_scale
 	var half_size = scaled_size / 2.0
 	if brush_shape == "square":
 		var rect_shape = RectangleShape2D.new()
@@ -1519,10 +1532,10 @@ func configure_line2d_for_brush(line: Line2D, brush_shape: String) -> void:
 
 func create_square_visuals(points: Array, shader_mat: ShaderMaterial, parent: Node) -> void:
 	## Creates axis-aligned square sprites for each point (for square brush)
-	var half_size = DRAW_SIZE / 2.0
+	var half_size = draw_size / 2.0
 	for point in points:
 		var square = ColorRect.new()
-		square.size = Vector2(DRAW_SIZE, DRAW_SIZE)
+		square.size = Vector2(draw_size, draw_size)
 		square.position = point - Vector2(half_size, half_size)
 		square.color = Color.WHITE
 		square.material = shader_mat
@@ -1535,7 +1548,7 @@ func create_static_body_for_stroke(stroke_data: Dictionary) -> void:
 	var stroke_shader = stroke_data["shader_material"]
 	var brush_shape = stroke_data.get("brush_shape", "circle")
 	var brush_scale = stroke_data.get("brush_scale", 1.0)
-	var scaled_size = DRAW_SIZE * brush_scale
+	var scaled_size = draw_size * brush_scale
 	
 	if stroke_points.is_empty():
 		return

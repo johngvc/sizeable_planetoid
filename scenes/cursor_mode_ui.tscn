@@ -15,174 +15,369 @@ offset_bottom = 50.0
 theme_override_font_sizes/font_size = 16
 text = "🎨 Cursor Mode (C)"
 
-[node name="ToolPanel" type="PanelContainer" parent="."]
+[node name="MainToolbar" type="PanelContainer" parent="."]
 unique_name_in_owner = true
 visible = false
 offset_left = 10.0
 offset_top = 60.0
 offset_right = 180.0
-offset_bottom = 540.0
+offset_bottom = 310.0
 
-[node name="VBoxContainer" type="VBoxContainer" parent="ToolPanel"]
+[node name="VBoxContainer" type="VBoxContainer" parent="MainToolbar"]
 layout_mode = 2
-theme_override_constants/separation = 10
+theme_override_constants/separation = 8
 
-[node name="ToolsLabel" type="Label" parent="ToolPanel/VBoxContainer"]
+[node name="ToolsLabel" type="Label" parent="MainToolbar/VBoxContainer"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 14
 text = "🔧 Tools"
 horizontal_alignment = 1
 
-[node name="DrawDynamicButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+[node name="DrawButton" type="CheckBox" parent="MainToolbar/VBoxContainer"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(150, 40)
 layout_mode = 2
 theme_override_font_sizes/font_size = 14
 button_pressed = true
-text = "✏️ Draw Dynamic"
+text = "✏️ Draw"
 
-[node name="DrawStaticButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(150, 40)
-layout_mode = 2
-theme_override_font_sizes/font_size = 14
-text = "📌 Draw Static"
-
-[node name="SelectButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+[node name="SelectButton" type="CheckBox" parent="MainToolbar/VBoxContainer"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(130, 40)
 layout_mode = 2
 theme_override_font_sizes/font_size = 14
 text = "👆 Select"
 
-[node name="EraserButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+[node name="EraserButton" type="CheckBox" parent="MainToolbar/VBoxContainer"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(130, 40)
 layout_mode = 2
 theme_override_font_sizes/font_size = 14
 text = "🧹 Eraser"
 
-[node name="ToolboxButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+[node name="ToolboxButton" type="CheckBox" parent="MainToolbar/VBoxContainer"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(130, 40)
 layout_mode = 2
 theme_override_font_sizes/font_size = 14
 text = "🧰 Toolbox"
 
-[node name="Separator" type="HSeparator" parent="ToolPanel/VBoxContainer"]
+[node name="Separator" type="HSeparator" parent="MainToolbar/VBoxContainer"]
 layout_mode = 2
 
-[node name="MaterialLabel" type="Label" parent="ToolPanel/VBoxContainer"]
+[node name="ActiveLayerLabel" type="Label" parent="MainToolbar/VBoxContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "📍 Active Layer: 1"
+horizontal_alignment = 1
+
+[node name="DrawPanel" type="PanelContainer" parent="."]
+unique_name_in_owner = true
+visible = false
+offset_left = 190.0
+offset_top = 60.0
+offset_right = 390.0
+offset_bottom = 580.0
+
+[node name="VBoxContainer" type="VBoxContainer" parent="DrawPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="DrawLabel" type="Label" parent="DrawPanel/VBoxContainer"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 14
+text = "✏️ Draw Settings"
+horizontal_alignment = 1
+
+[node name="Separator0" type="HSeparator" parent="DrawPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="DrawModeLabel" type="Label" parent="DrawPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "📦 Physics Type"
+horizontal_alignment = 1
+
+[node name="DrawDynamicButton" type="CheckBox" parent="DrawPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 36)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+button_pressed = true
+text = "🔄 Dynamic"
+
+[node name="DrawStaticButton" type="CheckBox" parent="DrawPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 36)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "📌 Static"
+
+[node name="Separator1" type="HSeparator" parent="DrawPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="MaterialLabel" type="Label" parent="DrawPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
 text = "🧱 Material"
 horizontal_alignment = 1
 
-[node name="WoodButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+[node name="WoodButton" type="CheckBox" parent="DrawPanel/VBoxContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(130, 36)
+custom_minimum_size = Vector2(130, 32)
 layout_mode = 2
-theme_override_font_sizes/font_size = 13
+theme_override_font_sizes/font_size = 12
 button_pressed = true
 text = "🪵 Wood"
 
-[node name="StoneButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+[node name="StoneButton" type="CheckBox" parent="DrawPanel/VBoxContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(130, 36)
+custom_minimum_size = Vector2(130, 32)
 layout_mode = 2
-theme_override_font_sizes/font_size = 13
+theme_override_font_sizes/font_size = 12
 text = "🪨 Stone"
 
-[node name="MetalButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+[node name="MetalButton" type="CheckBox" parent="DrawPanel/VBoxContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(130, 36)
+custom_minimum_size = Vector2(130, 32)
 layout_mode = 2
-theme_override_font_sizes/font_size = 13
+theme_override_font_sizes/font_size = 12
 text = "⚙️ Metal"
 
-[node name="BrickButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+[node name="BrickButton" type="CheckBox" parent="DrawPanel/VBoxContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(130, 36)
+custom_minimum_size = Vector2(130, 32)
 layout_mode = 2
-theme_override_font_sizes/font_size = 13
+theme_override_font_sizes/font_size = 12
 text = "🧱 Brick"
 
-[node name="PlasterButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+[node name="PlasterButton" type="CheckBox" parent="DrawPanel/VBoxContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(130, 36)
+custom_minimum_size = Vector2(130, 32)
 layout_mode = 2
-theme_override_font_sizes/font_size = 13
+theme_override_font_sizes/font_size = 12
 text = "🎨 Plaster"
 
-[node name="Separator2" type="HSeparator" parent="ToolPanel/VBoxContainer"]
+[node name="Separator2" type="HSeparator" parent="DrawPanel/VBoxContainer"]
 layout_mode = 2
 
-[node name="BrushShapeLabel" type="Label" parent="ToolPanel/VBoxContainer"]
+[node name="BrushShapeLabel" type="Label" parent="DrawPanel/VBoxContainer"]
 layout_mode = 2
-theme_override_font_sizes/font_size = 14
+theme_override_font_sizes/font_size = 12
 text = "🖌️ Brush Shape"
 horizontal_alignment = 1
 
-[node name="CircleBrushButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+[node name="DrawCircleBrushButton" type="CheckBox" parent="DrawPanel/VBoxContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(130, 36)
+custom_minimum_size = Vector2(130, 32)
 layout_mode = 2
-theme_override_font_sizes/font_size = 13
+theme_override_font_sizes/font_size = 12
 button_pressed = true
 text = "⚫ Circle"
 
-[node name="SquareBrushButton" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+[node name="DrawSquareBrushButton" type="CheckBox" parent="DrawPanel/VBoxContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(130, 36)
+custom_minimum_size = Vector2(130, 32)
 layout_mode = 2
-theme_override_font_sizes/font_size = 13
+theme_override_font_sizes/font_size = 12
 text = "⬛ Square"
 
-[node name="Separator3" type="HSeparator" parent="ToolPanel/VBoxContainer"]
+[node name="Separator3" type="HSeparator" parent="DrawPanel/VBoxContainer"]
 layout_mode = 2
 
-[node name="LayerLabel" type="Label" parent="ToolPanel/VBoxContainer"]
+[node name="DrawBrushSizeLabel" type="Label" parent="DrawPanel/VBoxContainer"]
+unique_name_in_owner = true
 layout_mode = 2
-theme_override_font_sizes/font_size = 14
-text = "📚 Layers"
+theme_override_font_sizes/font_size = 12
+text = "📏 Brush Size: 16"
 horizontal_alignment = 1
 
-[node name="Layer1Button" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+[node name="DrawBrushSizeSlider" type="HSlider" parent="DrawPanel/VBoxContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(130, 36)
+custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
-theme_override_font_sizes/font_size = 13
+min_value = 15.0
+max_value = 64.0
+value = 16.0
+
+[node name="Separator4" type="HSeparator" parent="DrawPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="DrawLayerLabel" type="Label" parent="DrawPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "📚 Layer"
+horizontal_alignment = 1
+
+[node name="DrawLayer1Button" type="CheckBox" parent="DrawPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 32)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
 button_pressed = true
 text = "📄 Layer 1 (Front)"
 
-[node name="Layer2Button" type="CheckBox" parent="ToolPanel/VBoxContainer"]
+[node name="DrawLayer2Button" type="CheckBox" parent="DrawPanel/VBoxContainer"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(130, 36)
-layout_mode = 2
-theme_override_font_sizes/font_size = 13
-text = "📄 Layer 2 (Back)"
-
-[node name="ShowOtherLayersButton" type="Button" parent="ToolPanel/VBoxContainer"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(130, 36)
+custom_minimum_size = Vector2(130, 32)
 layout_mode = 2
 theme_override_font_sizes/font_size = 12
+text = "📄 Layer 2 (Back)"
+
+[node name="DrawShowOtherLayersButton" type="Button" parent="DrawPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 32)
+layout_mode = 2
+theme_override_font_sizes/font_size = 11
 toggle_mode = true
 button_pressed = true
 text = "👁 Show Other Layers"
 
+[node name="SelectPanel" type="PanelContainer" parent="."]
+unique_name_in_owner = true
+visible = false
+offset_left = 190.0
+offset_top = 60.0
+offset_right = 390.0
+offset_bottom = 340.0
+
+[node name="VBoxContainer" type="VBoxContainer" parent="SelectPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="SelectLabel" type="Label" parent="SelectPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "👆 Select Settings"
+horizontal_alignment = 1
+
+[node name="Separator0" type="HSeparator" parent="SelectPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="TransformModeLabel" type="Label" parent="SelectPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "🔧 Transform Mode"
+horizontal_alignment = 1
+
+[node name="MoveButton" type="CheckBox" parent="SelectPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 36)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+button_pressed = true
+text = "↔️ Move"
+
+[node name="ResizeButton" type="CheckBox" parent="SelectPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 36)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "⤡ Resize"
+
+[node name="RotateButton" type="CheckBox" parent="SelectPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 36)
+layout_mode = 2
+theme_override_font_sizes/font_size = 13
+text = "🔄 Rotate"
+
+[node name="EraserPanel" type="PanelContainer" parent="."]
+unique_name_in_owner = true
+visible = false
+offset_left = 190.0
+offset_top = 60.0
+offset_right = 390.0
+offset_bottom = 340.0
+
+[node name="VBoxContainer" type="VBoxContainer" parent="EraserPanel"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="EraserLabel" type="Label" parent="EraserPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 14
+text = "🧹 Eraser Settings"
+horizontal_alignment = 1
+
+[node name="Separator0" type="HSeparator" parent="EraserPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="BrushShapeLabel" type="Label" parent="EraserPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "🖌️ Brush Shape"
+horizontal_alignment = 1
+
+[node name="EraserCircleBrushButton" type="CheckBox" parent="EraserPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 32)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+button_pressed = true
+text = "⚫ Circle"
+
+[node name="EraserSquareBrushButton" type="CheckBox" parent="EraserPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 32)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "⬛ Square"
+
+[node name="Separator1" type="HSeparator" parent="EraserPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="EraserBrushSizeLabel" type="Label" parent="EraserPanel/VBoxContainer"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "📏 Brush Size: 16"
+horizontal_alignment = 1
+
+[node name="EraserBrushSizeSlider" type="HSlider" parent="EraserPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+min_value = 15.0
+max_value = 64.0
+value = 16.0
+
+[node name="Separator2" type="HSeparator" parent="EraserPanel/VBoxContainer"]
+layout_mode = 2
+
+[node name="EraserLayerLabel" type="Label" parent="EraserPanel/VBoxContainer"]
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "📚 Layer"
+horizontal_alignment = 1
+
+[node name="EraserLayer1Button" type="CheckBox" parent="EraserPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 32)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+button_pressed = true
+text = "📄 Layer 1 (Front)"
+
+[node name="EraserLayer2Button" type="CheckBox" parent="EraserPanel/VBoxContainer"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(130, 32)
+layout_mode = 2
+theme_override_font_sizes/font_size = 12
+text = "📄 Layer 2 (Back)"
+
 [node name="ToolboxPanel" type="PanelContainer" parent="."]
 unique_name_in_owner = true
 visible = false
-anchors_preset = 0
 offset_left = 190.0
 offset_top = 60.0
-offset_right = 370.0
-offset_bottom = 300.0
+offset_right = 390.0
+offset_bottom = 320.0
 
 [node name="VBoxContainer" type="VBoxContainer" parent="ToolboxPanel"]
 layout_mode = 2
-theme_override_constants/separation = 10
+theme_override_constants/separation = 8
 
 [node name="ToolboxLabel" type="Label" parent="ToolboxPanel/VBoxContainer"]
 layout_mode = 2
@@ -225,7 +420,7 @@ layout_mode = 2
 [node name="InstructionLabel" type="Label" parent="ToolboxPanel/VBoxContainer"]
 layout_mode = 2
 theme_override_font_sizes/font_size = 11
-text = "Click on overlapping Layer 1 and Layer 2 objects to place bolts. Bolts will connect the objects when you exit cursor mode."
+text = "Click on overlapping Layer 1 and Layer 2 objects to place bolts."
 autowrap_mode = 3
 
 [node name="PauseButton" type="Button" parent="."]
