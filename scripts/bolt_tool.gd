@@ -15,20 +15,47 @@ const STRESS_WARNING_DISTANCE: float = 5.0  # Distance at which bolt shows stres
 #                   local_anchor2 (position in layer2_body local coords)
 var placed_bolts: Array = []
 
+# Bolts pending reattachment after body recreation
+var _pending_reattach: Array = []  # Array of indices needing reattachment
+var _reattach_delay_frames: int = 0  # Wait a few frames for physics to settle
+
 
 func _ready() -> void:
 	add_to_group("bolt_tool")
 
 
 func _physics_process(_delta: float) -> void:
-	"""Monitor bolt tension and snap bolts that are over-stressed"""
+	"""Monitor bolt tension and snap bolts that are over-stressed or have invalid attachments"""
+	
+	# Process pending reattachments after delay
+	if _pending_reattach.size() > 0:
+		_reattach_delay_frames -= 1
+		if _reattach_delay_frames <= 0:
+			_process_pending_reattachments()
+			_pending_reattach.clear()
+		return  # Skip normal processing while reattaching
+	
 	# Iterate backwards so we can safely remove snapped bolts
 	for i in range(placed_bolts.size() - 1, -1, -1):
 		var bolt_data = placed_bolts[i]
 		
-		# Skip if bodies are no longer valid
-		if not is_instance_valid(bolt_data.layer1_body) or not is_instance_valid(bolt_data.layer2_body):
-			snap_bolt(i, true)  # Clean up invalid bolts silently
+		# Check if bodies became invalid (happens when polygons are split/recreated)
+		var body1_valid = is_instance_valid(bolt_data.layer1_body)
+		var body2_valid = is_instance_valid(bolt_data.layer2_body)
+		
+		if not body1_valid or not body2_valid:
+			# Mark for reattachment - don't remove yet
+			if i not in _pending_reattach:
+				_pending_reattach.append(i)
+				_reattach_delay_frames = 3  # Wait 3 frames for new bodies to be created
+			continue
+		
+		# Check if attachment points still exist on the bodies (polygon region wasn't erased)
+		if not _is_attachment_point_valid(bolt_data.layer1_body, bolt_data.local_anchor1):
+			snap_bolt(i, true)  # Silent snap - region was erased
+			continue
+		if not _is_attachment_point_valid(bolt_data.layer2_body, bolt_data.local_anchor2):
+			snap_bolt(i, true)  # Silent snap - region was erased
 			continue
 		
 		# Calculate current tension (distance between anchor points in world space)
@@ -42,6 +69,156 @@ func _physics_process(_delta: float) -> void:
 		# Check if bolt should snap
 		if tension_distance > MAX_TENSION_DISTANCE:
 			snap_bolt(i, false)
+
+
+func _process_pending_reattachments() -> void:
+	"""Try to reattach bolts to recreated bodies"""
+	# Sort indices in reverse order for safe removal
+	_pending_reattach.sort()
+	_pending_reattach.reverse()
+	
+	for i in _pending_reattach:
+		if i >= placed_bolts.size():
+			continue
+		
+		var bolt_data = placed_bolts[i]
+		var world_pos = bolt_data.position
+		
+		# Try to find bodies at the original world position
+		var body1_valid = is_instance_valid(bolt_data.layer1_body)
+		var body2_valid = is_instance_valid(bolt_data.layer2_body)
+		
+		var new_body1 = bolt_data.layer1_body if body1_valid else _find_body_at_world_position(world_pos, 1)
+		var new_body2 = bolt_data.layer2_body if body2_valid else _find_body_at_world_position(world_pos, 2)
+		
+		if new_body1 == null or new_body2 == null:
+			# Can't find one or both bodies - remove bolt silently
+			snap_bolt(i, true)
+			continue
+		
+		# Update body references and local anchors
+		bolt_data.layer1_body = new_body1
+		bolt_data.layer2_body = new_body2
+		bolt_data.local_anchor1 = new_body1.to_local(world_pos)
+		bolt_data.local_anchor2 = new_body2.to_local(world_pos)
+		
+		# Recreate joint synchronously
+		_recreate_bolt_joint(bolt_data)
+
+
+func _find_body_at_world_position(world_pos: Vector2, layer: int) -> PhysicsBody2D:
+	"""Find a physics body at the given world position on the specified layer"""
+	var space_state = get_world_2d().direct_space_state
+	var query = PhysicsShapeQueryParameters2D.new()
+	
+	var shape = CircleShape2D.new()
+	shape.radius = 12.0  # Generous detection radius for re-acquisition
+	query.shape = shape
+	query.transform = Transform2D(0, world_pos)
+	
+	# Set collision mask to only detect the specified layer
+	if layer == 1:
+		query.collision_mask = 1 << 0  # Layer 1 collision bit
+	else:
+		query.collision_mask = 1 << 1  # Layer 2 collision bit
+	
+	var results = space_state.intersect_shape(query, 32)
+	
+	for result in results:
+		var collider = result.collider
+		if collider is PhysicsBody2D:
+			var body_layer = collider.get_meta("layer", 1)
+			if body_layer == layer:
+				return collider
+	
+	return null
+
+
+func _recreate_bolt_joint(bolt_data: Dictionary) -> void:
+	"""Recreate the bolt joint with updated body references (synchronous)"""
+	# Clean up old joint
+	if is_instance_valid(bolt_data.joint):
+		bolt_data.joint.queue_free()
+		bolt_data.joint = null
+	
+	# Can't recreate without valid bodies
+	if not is_instance_valid(bolt_data.layer1_body) or not is_instance_valid(bolt_data.layer2_body):
+		return
+	
+	# Create new joint
+	var pin_joint = PinJoint2D.new()
+	pin_joint.position = bolt_data.local_anchor1
+	
+	bolt_data.layer1_body.add_child(pin_joint)
+	
+	pin_joint.node_a = pin_joint.get_path_to(bolt_data.layer1_body)
+	pin_joint.node_b = pin_joint.get_path_to(bolt_data.layer2_body)
+	pin_joint.softness = 0.0
+	pin_joint.bias = 0.95
+	pin_joint.disable_collision = true
+	
+	# Recreate visual
+	var new_visual = create_bolt_visual(Vector2.ZERO)
+	pin_joint.add_child(new_visual)
+	
+	# Clean up old visual if it exists
+	if is_instance_valid(bolt_data.visual):
+		bolt_data.visual.queue_free()
+	
+	bolt_data.joint = pin_joint
+	bolt_data.visual = new_visual
+
+
+func _is_attachment_point_valid(body: PhysicsBody2D, local_pos: Vector2) -> bool:
+	"""Check if the attachment point still exists on the body (polygon hasn't been erased there)"""
+	if not is_instance_valid(body):
+		return false
+	
+	# Check collision polygons directly by testing if point is inside any of them
+	# Use a very small tolerance - only remove bolt if immediate area is erased
+	const TOLERANCE: float = 2.0  # Very small - only the immediate area under the bolt
+	
+	for child in body.get_children():
+		if child is CollisionPolygon2D:
+			var polygon = child.polygon
+			if polygon.size() < 3:
+				continue
+			# Transform local_pos to the child's local space (accounting for child position)
+			var point_in_child = local_pos - child.position
+			if Geometry2D.is_point_in_polygon(point_in_child, polygon):
+				return true
+			# Check with minimal tolerance for edge cases
+			if _is_point_near_polygon(point_in_child, polygon, TOLERANCE):
+				return true
+		elif child is CollisionShape2D:
+			# For regular collision shapes, check if point is within shape bounds
+			var point_in_child = local_pos - child.position
+			if child.shape is CircleShape2D:
+				if point_in_child.length() <= child.shape.radius + TOLERANCE:
+					return true
+			elif child.shape is RectangleShape2D:
+				var half_size = child.shape.size / 2.0 + Vector2(TOLERANCE, TOLERANCE)
+				if abs(point_in_child.x) <= half_size.x and abs(point_in_child.y) <= half_size.y:
+					return true
+	
+	return false
+
+
+func _is_point_near_polygon(point: Vector2, polygon: PackedVector2Array, tolerance: float) -> bool:
+	"""Check if a point is within tolerance distance of a polygon's edges or inside it"""
+	# First check if inside
+	if Geometry2D.is_point_in_polygon(point, polygon):
+		return true
+	
+	# Check distance to each edge
+	for i in range(polygon.size()):
+		var a = polygon[i]
+		var b = polygon[(i + 1) % polygon.size()]
+		var closest = Geometry2D.get_closest_point_to_segment(point, a, b)
+		if point.distance_to(closest) <= tolerance:
+			return true
+	
+	return false
 
 
 func snap_bolt(index: int, silent: bool = false) -> void:
