@@ -1,4 +1,4 @@
-[gd_scene load_steps=10 format=3 uid="uid://d5555555555a"]
+[gd_scene load_steps=13 format=3 uid="uid://d5555555555a"]
 
 [ext_resource type="PackedScene" uid="uid://c1234567890a" path="res://scenes/player.tscn" id="1_player_scene"]
 [ext_resource type="PackedScene" uid="uid://b9876543210a" path="res://scenes/ground.tscn" id="2_ground_scene"]
@@ -10,6 +10,9 @@
 [ext_resource type="PackedScene" path="res://scenes/select_move_manager.tscn" id="8_select_move"]
 [ext_resource type="PackedScene" uid="uid://cboundary12345" path="res://scenes/boundary.tscn" id="9_boundary"]
 [ext_resource type="Script" path="res://scripts/bolt_tool.gd" id="10_bolt_tool"]
+[ext_resource type="Script" path="res://scripts/string_tool.gd" id="11_string_tool"]
+[ext_resource type="Script" path="res://scripts/rod_tool.gd" id="12_rod_tool"]
+[ext_resource type="Script" path="res://scripts/elastic_tool.gd" id="13_elastic_tool"]
 
 [node name="Main" type="Node2D"]
 
@@ -64,3 +67,12 @@ position = Vector2(0, 50)
 
 [node name="BoltTool" type="Node2D" parent="."]
 script = ExtResource("10_bolt_tool")
+
+[node name="StringTool" type="Node2D" parent="."]
+script = ExtResource("11_string_tool")
+
+[node name="ElasticTool" type="Node2D" parent="."]
+script = ExtResource("13_elastic_tool")
+
+[node name="RodTool" type="Node2D" parent="."]
+script = ExtResource("12_rod_tool")
