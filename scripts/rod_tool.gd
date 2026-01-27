@@ -217,6 +217,58 @@ func _point_to_segment_distance(point: Vector2, seg_start: Vector2, seg_end: Vec
 	return point.distance_to(projection)
 
 
+func _is_attachment_point_valid(body: PhysicsBody2D, local_pos: Vector2) -> bool:
+	"""Check if an attachment point still exists on a body (hasn't been erased)"""
+	if not is_instance_valid(body):
+		return false
+	
+	# Check if the body still has any collision shapes
+	# If the body exists but all its collision was erased, it would have no shapes
+	var shape_count = body.get_child_count()
+	var has_collision = false
+	for i in range(shape_count):
+		var child = body.get_child(i)
+		if child is CollisionShape2D or child is CollisionPolygon2D:
+			has_collision = true
+			break
+	
+	if not has_collision:
+		return false
+	
+	# Do a spatial check - check if the attachment point is within
+	# a reasonable distance of the body's collision boundaries
+	var world_pos = body.to_global(local_pos)
+	var space_state = get_world_2d().direct_space_state
+	var query = PhysicsPointQueryParameters2D.new()
+	query.position = world_pos
+	query.collide_with_bodies = true
+	query.collide_with_areas = false
+	query.collision_mask = 0xFFFFFFFF  # Check all layers
+	
+	# Query for bodies at this point
+	var results = space_state.intersect_point(query, 5)  # Check up to 5 nearby bodies
+	
+	# Check if the attachment point still intersects with the original body
+	for result in results:
+		if result.collider == body:
+			return true
+	
+	# If point query failed, do a shape query with small radius as fallback
+	var shape_query = PhysicsShapeQueryParameters2D.new()
+	var circle = CircleShape2D.new()
+	circle.radius = 5.0  # Small tolerance radius
+	shape_query.shape = circle
+	shape_query.transform = Transform2D(0, world_pos)
+	shape_query.collision_mask = 0xFFFFFFFF
+	
+	var shape_results = space_state.intersect_shape(shape_query, 5)
+	for result in shape_results:
+		if result.collider == body:
+			return true
+	
+	return false
+
+
 func _is_rod_overstressed(rod_data: Dictionary) -> bool:
 	"""Check if rod is stressed beyond threshold (both tension and compression)"""
 	var body_a = rod_data.body_a
@@ -242,13 +294,18 @@ func _is_rod_overstressed(rod_data: Dictionary) -> bool:
 
 
 func _cleanup_invalid_rods() -> void:
-	"""Remove rods whose connected bodies no longer exist or are overstressed"""
+	"""Remove rods whose connected bodies no longer exist, attachment points were erased, or are overstressed"""
 	for i in range(placed_rods.size() - 1, -1, -1):
 		var rod_data = placed_rods[i]
 		var should_remove = false
 		
 		# Check for invalid bodies
 		if not is_instance_valid(rod_data.body_a) or not is_instance_valid(rod_data.body_b):
+			should_remove = true
+		# Check if attachment points still exist on the bodies (haven't been erased)
+		elif not _is_attachment_point_valid(rod_data.body_a, rod_data.attach_local_a):
+			should_remove = true
+		elif not _is_attachment_point_valid(rod_data.body_b, rod_data.attach_local_b):
 			should_remove = true
 		# Check for overstressed rod
 		elif _is_rod_overstressed(rod_data):
