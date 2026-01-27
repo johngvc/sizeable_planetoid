@@ -4,6 +4,7 @@ extends Node2D
 
 const ROD_WIDTH: float = 3.0
 const DETECTION_RADIUS: float = 20.0
+const STRESS_THRESHOLD: float = 0.35  # 35% stretch or compression causes snap
 
 # Track all placed rods
 var placed_rods: Array = []  # Array of { body_a, body_b, joint, line, attach_local_a, attach_local_b }
@@ -32,6 +33,9 @@ func _create_preview_line() -> void:
 
 
 func _physics_process(_delta: float) -> void:
+	# Clean up rods that are overstressed or have invalid bodies
+	_cleanup_invalid_rods()
+	
 	# Update rod visuals
 	for rod_data in placed_rods:
 		_update_rod_visual(rod_data)
@@ -213,15 +217,52 @@ func _point_to_segment_distance(point: Vector2, seg_start: Vector2, seg_end: Vec
 	return point.distance_to(projection)
 
 
-func cleanup_invalid_rods() -> void:
-	"""Remove rods whose connected bodies no longer exist"""
+func _is_rod_overstressed(rod_data: Dictionary) -> bool:
+	"""Check if rod is stressed beyond threshold (both tension and compression)"""
+	var body_a = rod_data.body_a
+	var body_b = rod_data.body_b
+	
+	if not is_instance_valid(body_a) or not is_instance_valid(body_b):
+		return false
+	
+	var pos_a = body_a.to_global(rod_data.attach_local_a)
+	var pos_b = body_b.to_global(rod_data.attach_local_b)
+	var current_distance = pos_a.distance_to(pos_b)
+	var original_length = rod_data.length
+	
+	# Avoid division by zero for very short rods
+	if original_length < 0.001:
+		return false
+	
+	# Calculate stress ratio (how much the rod has deviated from original length)
+	var stress_ratio = abs(current_distance - original_length) / original_length
+	
+	# Snap if stress exceeds threshold (15% stretch OR compression)
+	return stress_ratio > STRESS_THRESHOLD
+
+
+func _cleanup_invalid_rods() -> void:
+	"""Remove rods whose connected bodies no longer exist or are overstressed"""
 	for i in range(placed_rods.size() - 1, -1, -1):
 		var rod_data = placed_rods[i]
+		var should_remove = false
 		
+		# Check for invalid bodies
 		if not is_instance_valid(rod_data.body_a) or not is_instance_valid(rod_data.body_b):
+			should_remove = true
+		# Check for overstressed rod
+		elif _is_rod_overstressed(rod_data):
+			should_remove = true
+		
+		if should_remove:
 			if is_instance_valid(rod_data.joint):
 				rod_data.joint.queue_free()
 			if is_instance_valid(rod_data.line):
 				rod_data.line.queue_free()
 			
 			placed_rods.remove_at(i)
+
+
+func cleanup_invalid_rods() -> void:
+	"""Public wrapper for cleaning up invalid rods"""
+	_cleanup_invalid_rods()
