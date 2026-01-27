@@ -139,8 +139,8 @@ func _is_rope_overstretched(string_data: Dictionary) -> bool:
 	
 	# Only snap if distance INCREASES beyond threshold (tension, not compression)
 	# The rope has slack (1.1x), so allow stretching beyond initial distance
-	# Snap at 50% beyond the initial constraint distance
-	var snap_threshold = initial_distance * 1.50
+	# Snap at 100% beyond the initial constraint distance
+	var snap_threshold = initial_distance * 2.0
 	
 	# Only break if current distance is greater than initial AND greater than snap threshold
 	var should_snap = current_distance > initial_distance and current_distance > snap_threshold
@@ -253,9 +253,9 @@ func _create_anchor_joint(body: PhysicsBody2D, local_pos: Vector2, anchor: RopeP
 	joint.node_a = joint.get_path_to(body)
 	joint.node_b = joint.get_path_to(anchor)
 	
-	# Joint settings - slightly soft for stability
-	joint.softness = 0.1
-	joint.bias = 0.9
+	# Joint settings - stiff but with minimal give to prevent oscillation
+	joint.softness = 0.02  # Tiny bit of give to allow settling
+	joint.bias = 0.95  # High correction but not instant
 	joint.disable_collision = true
 	
 	return joint
@@ -395,7 +395,7 @@ func create_string(body_a: PhysicsBody2D, local_a: Vector2, body_b: PhysicsBody2
 
 
 func _adjust_rope_segment_masses(rope: Rope, target_mass: float, freeze_if_paused: bool = false) -> void:
-	"""Adjust the mass of rope segments and disable collisions between them"""
+	"""Adjust the mass of rope segments, stiffen joints, and disable collisions"""
 	var walker: RopePiece = rope.rope_start
 	while walker:
 		if walker is RigidBody2D:
@@ -413,6 +413,13 @@ func _adjust_rope_segment_masses(rope: Rope, target_mass: float, freeze_if_pause
 			# Disable the mouse force behavior (prevents rope being pulled to cursor)
 			if "enable_mouse_force" in walker:
 				walker.enable_mouse_force = false
+			
+			# Stiffen the segment's PinJoint2D for stronger rope
+			if walker.has_node("PinJoint2D"):
+				var segment_joint = walker.get_node("PinJoint2D") as PinJoint2D
+				if segment_joint:
+					segment_joint.softness = 0.02  # Tiny bit of give to allow settling
+					segment_joint.bias = 0.95  # High correction but not instant
 			
 			# Freeze if physics is paused
 			if freeze_if_paused:
