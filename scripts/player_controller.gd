@@ -6,13 +6,27 @@ signal fly_mode_changed(active: bool)
 signal layer_changed(new_layer: int)
 signal grab_state_changed(is_grabbing: bool, grabbed_object: RigidBody2D)
 
-# Movement constants (force-based)
-const MOVE_FORCE = 2000.0  # Horizontal movement force
-const FLY_FORCE = 1200.0  # Force in fly mode
-const MAX_SPEED = 200.0  # Maximum horizontal speed
-const FLY_MAX_SPEED = 250.0  # Maximum speed in fly mode
-const JUMP_IMPULSE = 450.0  # Upward impulse for jumping (halved)
-const AIR_CONTROL_MULTIPLIER = 0.7  # Reduced control in air
+# Movement constants (force-based, tuned for mass=1.5)
+# Force = mass * acceleration. With mass=1.5, force of 1500 gives accel of 1000 units/s²
+const MOVE_FORCE = 1500.0  # Base horizontal movement force
+const FLY_FORCE = 1000.0  # Force in fly mode
+const MAX_SPEED = 300.0  # Maximum horizontal speed
+const FLY_MAX_SPEED = 350.0  # Maximum speed in fly mode
+const JUMP_VELOCITY = 350.0  # Upward velocity for jumping
+const AIR_CONTROL_MULTIPLIER = 0.6  # Reduced control in air
+const JUMP_GRACE_TIME = 0.15  # Time after jump where we ignore grounded state
+
+# Slope climbing constants (Sackboy-style)
+const SLOPE_GRAVITY_SCALE = 0.4  # Reduced gravity when climbing slopes (floaty feel)
+const SLOPE_UPWARD_ASSIST = 0.3  # Upward force multiplier when moving on slopes
+const NORMAL_GRAVITY_SCALE = 1.0  # Default gravity
+const SLOPE_SPEED_MULTIPLIER = 0.8  # Slope climbing speed is 80% of ground speed
+const MAX_CLIMBABLE_ANGLE = 70.0  # Degrees - slopes steeper than this are hard to climb
+# cos(70°) ≈ 0.342, so normal.y must be <= -0.342 for climbable
+const MAX_CLIMBABLE_NORMAL_Y = -0.342
+
+# Debug logging control
+var debug_movement = true  # Enable detailed movement logging
 
 # Grab constants
 const GRAB_FORCE_GROUNDED = 1.0  # Full force when grounded
@@ -72,6 +86,13 @@ var was_grounded: bool = true
 var pre_landing_velocity_x: float = 0.0
 var just_landed: bool = false  # Flag for _physics_process to also restore velocity
 
+# Jump state
+var jump_timer: float = 0.0  # Grace period after jumping
+
+# Slope tracking
+var current_floor_normal: Vector2 = Vector2.UP  # Normal of the surface we're standing on
+var on_slope: bool = false  # True if on a slope steep enough to need compensation
+
 # Push tracking to prevent twitching
 var push_cooldowns: Dictionary = {}  # Object RID -> cooldown timer
 const PUSH_COOLDOWN_TIME = 0.15  # Seconds before same object can be pushed again
@@ -80,25 +101,78 @@ var objects_being_pushed: Array[RigidBody2D] = []  # Objects currently in contac
 # Jump state to prevent climbing on objects
 var is_jumping: bool = false  # True when player initiated a jump
 
+# Wall contact state (updated in _integrate_forces, used for logging)
+var is_touching_wall: bool = false
+var wall_push_direction: int = 0  # -1 = wall on left, 1 = wall on right, 0 = no wall
+var wall_contact_timer: float = 0.0  # Persistence timer to prevent oscillation
+const WALL_CONTACT_PERSIST_TIME = 0.1  # How long wall contact "sticks" after losing contact
+
+# RigidBody push contact persistence (to prevent shaking when pushing heavy objects)
+var recent_push_contacts: Dictionary = {}  # RID -> {body, position, timer}
+const PUSH_CONTACT_PERSIST_TIME = 0.15  # How long push contact persists after losing contact
+
+# Velocity tracking for debugging
+var last_frame_velocity: Vector2 = Vector2.ZERO
+
 
 func _integrate_forces(state: PhysicsDirectBodyState2D) -> void:
+	# Skip all platformer physics processing in fly mode
+	if is_fly_mode:
+		return
+	
+	# EARLY VELOCITY CHECK: Detect extreme velocity changes (physics engine might be doing something crazy)
+	var current_vel = state.get_linear_velocity()
+	var vel_delta = current_vel - last_frame_velocity
+	if vel_delta.length() > 500 and debug_movement:
+		print("[VELOCITY_SPIKE] vel=", snapped(current_vel, Vector2(1, 1)), " was=", snapped(last_frame_velocity, Vector2(1, 1)), " delta=", snapped(vel_delta, Vector2(1, 1)), " contacts=", state.get_contact_count())
+	last_frame_velocity = current_vel
+	
 	# Check if we just landed by looking at contacts
 	var is_grounded_now = false
 	var contacted_bodies: Array[RigidBody2D] = []
 	var has_climbable_rigidbody_slope = false  # True if any RigidBody2D contact is climbable
 	var touching_rigidbody = false
+	var touching_wall = false  # True if touching a near-vertical surface (static or dynamic)
+	var wall_normal_x = 0.0  # Average wall normal x component
+	var wall_contact_count = 0
 	
 	# Slope threshold: 75 degrees from horizontal
 	# cos(75°) ≈ 0.259, so normal.y must be <= -0.259 for climbable slope
 	const CLIMBABLE_SLOPE_THRESHOLD = -0.259
+	# Wall threshold: nearly vertical surfaces (within 15 degrees of vertical)
+	# cos(75°) ≈ 0.259 for normal.x means surface is 15° from vertical
+	const WALL_THRESHOLD = 0.3
+	# Slope compensation: apply force to prevent sliding on slopes up to 45°
+	const SLOPE_STICK_THRESHOLD = -0.7  # cos(45°) ≈ 0.707
+	
+	var best_floor_normal = Vector2.UP
+	var best_floor_dot = 0.0  # Track the most "floor-like" contact
 	
 	for i in range(state.get_contact_count()):
 		var normal = state.get_contact_local_normal(i)
-		if normal.y < -0.5:
+		var collider = state.get_contact_collider_object(i)
+		var collider_name = collider.name if collider else "unknown"
+		
+		# Ground contact detection - accept slopes up to ~75° as "ground"
+		# normal.y < -0.26 means the surface is pointing somewhat upward
+		if normal.y < CLIMBABLE_SLOPE_THRESHOLD:
 			is_grounded_now = true
+			# Track the most floor-like contact (most negative y = most upward-pointing)
+			if normal.y < best_floor_dot:
+				best_floor_dot = normal.y
+				best_floor_normal = normal
+		
+		# Wall contact detection - near vertical surfaces (both static and dynamic)
+		# A wall has a mostly horizontal normal (abs(normal.x) > 0.7 means < 45° from vertical)
+		if abs(normal.x) > 0.7 and abs(normal.y) < WALL_THRESHOLD:
+			touching_wall = true
+			wall_normal_x += normal.x
+			wall_contact_count += 1
+			# Log wall contacts for debugging
+			if Engine.get_physics_frames() % 15 == 0:
+				print("[WALL_CONTACT] normal=", snapped(normal, Vector2(0.01, 0.01)), " collider=", collider_name)
 		
 		# Track RigidBody2D contacts for continuous pushing
-		var collider = state.get_contact_collider_object(i)
 		if collider is RigidBody2D and collider != self:
 			touching_rigidbody = true
 			if not contacted_bodies.has(collider):
@@ -111,33 +185,156 @@ func _integrate_forces(state: PhysicsDirectBodyState2D) -> void:
 	# Update list of objects being pushed
 	objects_being_pushed = contacted_bodies
 	
-	# Prevent climbing on objects - if touching a RigidBody2D with steep slope and not jumping,
+	# Update floor normal for slope handling
+	if is_grounded_now:
+		current_floor_normal = best_floor_normal
+		# Check if we're on a significant slope (not flat ground)
+		on_slope = abs(current_floor_normal.x) > 0.15  # More than ~8.5° slope
+	else:
+		current_floor_normal = Vector2.UP
+		on_slope = false
+	
+	# Update persistent push contact tracking
+	# Add/refresh current contacts
+	for body in contacted_bodies:
+		var rid = body.get_rid()
+		recent_push_contacts[rid] = {
+			"body": body,
+			"position": body.global_position,
+			"timer": PUSH_CONTACT_PERSIST_TIME
+		}
+	
+	# Decay timers and remove expired entries
+	var expired_rids: Array = []
+	for rid in recent_push_contacts:
+		if not contacted_bodies.has(recent_push_contacts[rid]["body"]):
+			recent_push_contacts[rid]["timer"] -= state.get_step()
+			if recent_push_contacts[rid]["timer"] <= 0:
+				expired_rids.append(rid)
+	for rid in expired_rids:
+		recent_push_contacts.erase(rid)
+	
+	# Calculate average wall normal direction
+	if wall_contact_count > 0:
+		wall_normal_x /= wall_contact_count
+	
+	var vel = state.get_linear_velocity()
+	var original_vel = vel
+	
+	# WALL FLOAT PREVENTION: When touching a wall while airborne and not grounded,
+	# prevent the player from maintaining or gaining height by pushing into the wall
+	if touching_wall and not is_grounded_now and not is_jumping:
+		# Check if player is trying to move INTO the wall (velocity opposes wall normal)
+		var moving_into_wall = (wall_normal_x > 0 and vel.x < -10) or (wall_normal_x < 0 and vel.x > 10)
+		
+		if moving_into_wall:
+			# Cancel any upward velocity that might be caused by collision response
+			if vel.y < 0:
+				vel.y = 0
+				print("[WALL_FLOAT_BLOCK] Cancelled upward vel while pushing into wall. was_vel=", snapped(original_vel, Vector2(0.1, 0.1)))
+			
+			# Also reduce horizontal velocity pushing into wall to prevent "sticking"
+			var wall_slide_factor = 0.3  # Allow some sliding, but reduce wall push
+			if wall_normal_x > 0:  # Wall on left, player pushing left
+				vel.x = max(vel.x, -MAX_SPEED * wall_slide_factor)
+			else:  # Wall on right, player pushing right
+				vel.x = min(vel.x, MAX_SPEED * wall_slide_factor)
+			
+			state.set_linear_velocity(vel)
+	
+	# Update wall tracking state for other systems with persistence
+	# This prevents oscillation when bouncing off walls
+	if touching_wall:
+		is_touching_wall = true
+		wall_push_direction = int(sign(-wall_normal_x))
+		wall_contact_timer = WALL_CONTACT_PERSIST_TIME
+	else:
+		# Decay the timer, keep wall state until timer expires
+		wall_contact_timer -= state.get_step()
+		if wall_contact_timer <= 0:
+			is_touching_wall = false
+			wall_push_direction = 0
+	
+	# Prevent climbing on RigidBody2D objects - if touching with steep slope and not in jump grace period,
 	# clamp upward velocity to prevent collision response from lifting the player
-	if touching_rigidbody and not is_jumping and not has_climbable_rigidbody_slope:
-		var vel = state.get_linear_velocity()
-		if vel.y < 0:  # Moving upward
+	if touching_rigidbody and jump_timer <= 0 and not has_climbable_rigidbody_slope:
+		vel = state.get_linear_velocity()
+		if vel.y < -10:  # Moving upward significantly
 			vel.y = 0  # Cancel upward movement from collision
 			state.set_linear_velocity(vel)
-			print("[CLIMB_BLOCK] Prevented climbing - slope too steep (>75°)")
+			if Engine.get_physics_frames() % 30 == 0:  # Reduce log spam
+				print("[CLIMB_BLOCK] Prevented climbing")
 	
-	# Reset jump state when grounded
-	if is_grounded_now:
+	# Decay jump timer
+	if jump_timer > 0:
+		jump_timer -= state.get_step()
+	
+	# DYNAMIC GRAVITY SCALING (Sackboy-style)
+	# Check if player is pressing movement input
+	var horizontal_input = Input.get_axis("ui_left", "ui_right")
+	if horizontal_input == 0:
+		horizontal_input = Input.get_axis("move_left", "move_right")
+	
+	# When moving on a slope, reduce gravity for that floaty climbing feel
+	if is_grounded_now and on_slope and horizontal_input != 0 and jump_timer <= 0:
+		gravity_scale = SLOPE_GRAVITY_SCALE
+	elif not is_grounded_now or not on_slope:
+		gravity_scale = NORMAL_GRAVITY_SCALE
+	
+	# ANTI-SLIDE FRICTION (Sackboy-style)
+	# When idle on a slope, lock the player in place
+	if is_grounded_now and on_slope and jump_timer <= 0 and horizontal_input == 0:
+		var vel_now = state.get_linear_velocity()
+		
+		# If velocity is low, just stop the player completely (high friction simulation)
+		if abs(vel_now.x) < 30:
+			vel_now.x = 0
+			state.set_linear_velocity(vel_now)
+		else:
+			# Apply strong braking force
+			var brake_force = -sign(vel_now.x) * MOVE_FORCE * 2.0
+			state.apply_central_force(Vector2(brake_force, 0))
+		
+		if Engine.get_physics_frames() % 60 == 0 and debug_movement:
+			print("[SLOPE] idle brake, vel.x=", snapped(vel_now.x, 1))
+	
+	# Reset jump state when grounded AND jump grace period is over
+	if is_grounded_now and jump_timer <= 0:
 		is_jumping = false
 	
-	# Preserve horizontal velocity when landing
+	# Preserve horizontal velocity when landing (but don't let it accumulate)
 	if is_grounded_now and not was_grounded:
-		# Restore horizontal velocity that collision tried to kill
-		var vel = state.get_linear_velocity()
-		vel.x = pre_landing_velocity_x
-		state.set_linear_velocity(vel)
-		just_landed = true  # Tell _physics_process to also restore
-		print("[LAND] Restored vel.x to ", pre_landing_velocity_x)
+		vel = state.get_linear_velocity()
+		# Only restore if it helps maintain momentum, not gain it
+		# And cap to MAX_SPEED to prevent accumulation
+		var capped_restore = clamp(pre_landing_velocity_x, -MAX_SPEED, MAX_SPEED)
+		# Only restore if current velocity is significantly lower (collision killed it)
+		if abs(vel.x) < abs(capped_restore) * 0.5:
+			vel.x = capped_restore
+			state.set_linear_velocity(vel)
+			just_landed = true
+			if Engine.get_physics_frames() % 30 == 0:  # Reduce log spam
+				print("[LAND] Restored vel.x to ", snapped(capped_restore, 0.1))
 	
-	# Track velocity while airborne for next landing
+	# Track velocity while airborne for next landing (capped)
 	if not is_grounded_now:
-		pre_landing_velocity_x = state.get_linear_velocity().x
+		pre_landing_velocity_x = clamp(state.get_linear_velocity().x, -MAX_SPEED, MAX_SPEED)
 	
 	was_grounded = is_grounded_now
+	
+	# SANITY CHECK: Clamp extreme velocities that shouldn't occur
+	vel = state.get_linear_velocity()
+	var max_sane_vel = MAX_SPEED * 5  # Allow up to 5x max speed before clamping
+	if abs(vel.x) > max_sane_vel or abs(vel.y) > max_sane_vel:
+		print("[EXTREME_VEL_FIX] Clamping insane velocity: ", snapped(vel, Vector2(1, 1)))
+		vel.x = clamp(vel.x, -max_sane_vel, max_sane_vel)
+		vel.y = clamp(vel.y, -max_sane_vel, max_sane_vel)
+		state.set_linear_velocity(vel)
+	
+	# Periodic debug logging for physics state
+	if debug_movement and Engine.get_physics_frames() % 60 == 0:
+		print("[PHYSICS] grounded=", is_grounded_now, " wall=", touching_wall, " rb=", touching_rigidbody, 
+			" vel=", snapped(state.get_linear_velocity(), Vector2(1, 1)), " contacts=", state.get_contact_count())
 
 
 func _ready() -> void:
@@ -161,6 +358,10 @@ func _ready() -> void:
 	
 	# Connect body signals for push detection
 	body_entered.connect(_on_body_entered)
+	
+	# Clear any initial velocity
+	linear_velocity = Vector2.ZERO
+	print("[READY] Player initialized. mass=", mass, " linear_damp=", linear_damp, " pos=", global_position)
 	
 	# Find cursor after scene is ready
 	await get_tree().process_frame
@@ -221,13 +422,43 @@ func _handle_platformer_mode(delta: float) -> void:
 			apply_central_force(Vector2(-sign(linear_velocity.x) * MOVE_FORCE * 0.5, 0))
 		return
 	
-	# Handle jump - set velocity directly since impulse doesn't work properly
+	# Handle jump - with slope-based reduction
 	if Input.is_action_just_pressed("ui_accept") and is_grounded and not is_grabbing:
-		# Calculate jump velocity: impulse / mass
-		var jump_velocity = -JUMP_IMPULSE / mass
-		linear_velocity.y = jump_velocity
-		is_jumping = true  # Mark that player initiated a jump
-		print("[JUMP] vel.y set to ", linear_velocity.y)
+		# Calculate jump power based on slope steepness
+		var jump_multiplier = 1.0
+		
+		if on_slope:
+			# Calculate slope angle from floor normal
+			# normal.y = -1 is flat (0°), normal.y = 0 is vertical (90°)
+			# steepness = abs(normal.x) = sin(angle)
+			# 60° start threshold: sin(60°) ≈ 0.866
+			# 70° full reduction: sin(70°) ≈ 0.94, jump is 10%
+			var start_threshold = 0.866  # abs(normal.x) at 60° = sin(60°)
+			var steep_threshold = 0.94   # abs(normal.x) at 70° = sin(70°)
+			
+			var steepness = abs(current_floor_normal.x)  # 0 at flat, 0.94 at 70°
+			if steepness > start_threshold:  # Only reduce on slopes >= 60°
+				# Map steepness 0.866-0.94 to multiplier 1.0-0.1
+				jump_multiplier = lerp(1.0, 0.1, clamp((steepness - start_threshold) / (steep_threshold - start_threshold), 0.0, 1.0))
+		
+		# Calculate jump velocity with slope reduction
+		var actual_jump_velocity = JUMP_VELOCITY * jump_multiplier
+		
+		# PREVENT VELOCITY ACCUMULATION: Reset vertical velocity before jumping
+		# This prevents stacking jumps for extra height
+		linear_velocity.y = -actual_jump_velocity
+		
+		# Also cap horizontal velocity on jump to prevent speed accumulation
+		var max_jump_horizontal = MAX_SPEED * 0.8
+		linear_velocity.x = clamp(linear_velocity.x, -max_jump_horizontal, max_jump_horizontal)
+		
+		is_jumping = true
+		jump_timer = JUMP_GRACE_TIME  # Grace period to escape ground detection
+		
+		if jump_multiplier < 1.0:
+			print("[JUMP] slope reduced: vel.y=", snapped(-actual_jump_velocity, 0.1), " mult=", snapped(jump_multiplier, 0.01))
+		else:
+			print("[JUMP] vel.y=", -actual_jump_velocity)
 	
 	# Get horizontal input
 	var direction := Input.get_axis("ui_left", "ui_right")
@@ -236,39 +467,141 @@ func _handle_platformer_mode(delta: float) -> void:
 	
 	var action = "none"
 	
-	if direction != 0:
-		# Set velocity directly to target speed when grounded for consistent movement
-		# Use gradual acceleration only in air for more floaty air control
-		var target_speed = direction * MAX_SPEED
-		if is_grounded:
-			# Grounded: instant full speed (overrides collision friction)
-			linear_velocity.x = target_speed
-		else:
-			# Airborne: gradual acceleration with reduced control
-			var new_vel_x = move_toward(linear_velocity.x, target_speed, MOVE_FORCE * AIR_CONTROL_MULTIPLIER * delta)
-			linear_velocity.x = new_vel_x
-		action = "move dir=" + str(direction) + " target=" + str(target_speed)
-	else:
-		# Apply friction to slow down when no input
-		if is_grounded:
-			var new_vel_x = move_toward(linear_velocity.x, 0, MOVE_FORCE * 2 * delta)
-			linear_velocity.x = new_vel_x
-			action = "friction (grounded)"
-		else:
-			action = "no input (air)"
+	# Check if we're pushing into a wall/object (works for both grounded and airborne)
+	# Use multiple detection methods for reliability:
+	# 1. Wall normal detection (is_touching_wall from _integrate_forces)
+	# 2. Persistent RigidBody2D contact tracking (recent_push_contacts)
+	var pushing_into_wall = false
+	var push_target_direction = 0
 	
-	# Log when velocity changes significantly or every half second
-	var vel_changed = abs(linear_velocity.x - old_vel.x) > 5 or abs(linear_velocity.y - old_vel.y) > 5
-	if vel_changed or Engine.get_physics_frames() % 30 == 0:
-		print("[Move] grounded=", is_grounded, " vel=", snapped(linear_velocity, Vector2(0.1, 0.1)), " action=", action, " delta=", snapped(delta, 0.001), " linear_damp=", linear_damp)
+	# Method 1: Wall normal detection
+	if is_touching_wall:
+		if (wall_push_direction > 0 and direction > 0) or (wall_push_direction < 0 and direction < 0):
+			pushing_into_wall = true
+			push_target_direction = wall_push_direction
+	
+	# Method 2: Persistent RigidBody2D contact detection (uses timer-based persistence)
+	if not pushing_into_wall and direction != 0 and recent_push_contacts.size() > 0:
+		for rid in recent_push_contacts:
+			var contact_data = recent_push_contacts[rid]
+			var body = contact_data["body"]
+			if is_instance_valid(body):
+				var to_body = (body.global_position - global_position).normalized()
+				# Check if we're trying to move toward this body
+				if (to_body.x > 0.3 and direction > 0) or (to_body.x < -0.3 and direction < 0):
+					pushing_into_wall = true
+					push_target_direction = int(sign(to_body.x))
+					break
+	
+	# SACKBOY-STYLE FORCE-BASED MOVEMENT
+	# Use proportional control: force scales with how far we are from target speed
+	# This naturally limits acceleration as we approach max speed
+	var applied_force = Vector2.ZERO  # Now a Vector2 for slope-aligned movement
+	
+	if direction != 0:
+		var target_speed = direction * MAX_SPEED
+		var current_speed = linear_velocity.x
+		var speed_diff = target_speed - current_speed
+		var speed_ratio = abs(current_speed) / MAX_SPEED  # 0 to 1+
+		
+		if pushing_into_wall:
+			# Pushing into wall/object: gentle constant force
+			applied_force = Vector2(direction * MOVE_FORCE * 0.3, 0)
+			action = "push"
+		elif is_grounded:
+			# Grounded: force reduces as we approach max speed (proportional control)
+			var force_scale = clamp(1.0 - speed_ratio * 0.8, 0.2, 1.0)
+			var base_force_magnitude = MOVE_FORCE * force_scale
+			
+			if on_slope:
+				# VECTOR PROJECTION: Push along the slope, not just horizontally
+				# For a normal (nx, ny), the tangent pointing "right" along the surface is:
+				# (-ny, nx) for upward-pointing normals (ny < 0)
+				# This ensures we push ALONG the slope surface, not into it
+				var slope_tangent = Vector2(-current_floor_normal.y, current_floor_normal.x)
+				# slope_tangent now points "right" along the slope
+				# Flip for leftward movement
+				if direction < 0:
+					slope_tangent = -slope_tangent
+				
+				slope_tangent = slope_tangent.normalized()
+				
+				# Check if going uphill (moving against the direction normal.x points)
+				var going_uphill = (current_floor_normal.x > 0 and direction < 0) or (current_floor_normal.x < 0 and direction > 0)
+				
+				# Apply slope speed multiplier (80% of ground speed)
+				var slope_force = base_force_magnitude * SLOPE_SPEED_MULTIPLIER
+				
+				# Check if slope is too steep (steeper than 70 degrees)
+				# normal.y closer to 0 = steeper slope
+				var is_too_steep = current_floor_normal.y > MAX_CLIMBABLE_NORMAL_Y
+				
+				if going_uphill and is_too_steep:
+					# Steep slope penalty - greatly reduce climbing ability
+					# The steeper it is, the harder to climb
+					var steepness_factor = abs(current_floor_normal.x)  # 0.94 at 70°, 1.0 at 90°
+					var climb_penalty = 1.0 - ((steepness_factor - 0.94) / 0.06)  # 1.0 at 70°, 0.0 at 90°
+					climb_penalty = clamp(climb_penalty, 0.1, 1.0)  # Never fully zero
+					slope_force *= climb_penalty * 0.3  # Heavy penalty on steep slopes
+					action = "steep f=" + str(snapped(slope_force, 0.1)) + " pen=" + str(snapped(climb_penalty, 0.01))
+				else:
+					if going_uphill:
+						action = "uphill f=" + str(snapped(slope_force, 0.1))
+					else:
+						action = "downhill f=" + str(snapped(slope_force, 0.1))
+				
+				# Apply force along the slope
+				applied_force = slope_tangent * slope_force
+				
+				# UPWARD ASSIST: When going uphill (and not too steep), add extra upward force
+				if going_uphill and not is_too_steep:
+					var upward_assist = slope_force * SLOPE_UPWARD_ASSIST
+					applied_force.y -= upward_assist  # Negative Y is up
+			else:
+				# Flat ground: just horizontal force
+				applied_force = Vector2(direction * base_force_magnitude, 0)
+				action = "ground f=" + str(snapped(applied_force.x, 0.1))
+		else:
+			# Airborne: reduced and proportional
+			var force_scale = clamp(1.0 - speed_ratio * 0.9, 0.1, 1.0)
+			var air_force = direction * MOVE_FORCE * AIR_CONTROL_MULTIPLIER * force_scale
+			applied_force = Vector2(air_force, 0)
+			action = "air f=" + str(snapped(air_force, 0.1))
+		
+		apply_central_force(applied_force)
+	else:
+		# No input: rely on linear_damp for natural slowdown
+		# Only apply active braking if moving fast on ground (and not on a slope - that's handled in _integrate_forces)
+		if is_grounded and abs(linear_velocity.x) > 20 and not on_slope:
+			var brake_force = -sign(linear_velocity.x) * MOVE_FORCE * 0.5
+			apply_central_force(Vector2(brake_force, 0))
+			action = "brake f=" + str(snapped(brake_force, 0.1))
+		else:
+			action = "idle"
+	
+	# Detailed logging for movement diagnosis
+	if debug_movement:
+		var vel_changed = abs(linear_velocity.x - old_vel.x) > 10 or abs(linear_velocity.y - old_vel.y) > 10
+		var extreme_vel = abs(linear_velocity.x) > MAX_SPEED * 2 or abs(linear_velocity.y) > 1000
+		
+		if vel_changed or extreme_vel or Engine.get_physics_frames() % 60 == 0:
+			var state = "G" if is_grounded else "A"  # Grounded/Airborne
+			var push_info = ""
+			if pushing_into_wall:
+				push_info = " PUSH"
+			if extreme_vel:
+				print("[EXTREME_VEL] vel=", snapped(linear_velocity, Vector2(1, 1)), " old=", snapped(old_vel, Vector2(1, 1)), " delta=", snapped(linear_velocity - old_vel, Vector2(1, 1)))
+			print("[Move] ", state, push_info, " dir=", direction, " vel=", snapped(linear_velocity, Vector2(1, 1)), " ", action)
 
 
 func _handle_fly_mode(delta: float) -> void:
 	var cursor_active = cursor and cursor.has_method("is_cursor_active") and cursor.is_cursor_active()
 	
 	if cursor_active:
-		# Apply drag velocity from cursor
-		linear_velocity = drag_velocity
+		# Smooth drag movement - interpolate toward drag velocity for smoothness
+		var target_vel = drag_velocity
+		var smoothing = 8.0  # Higher = snappier, lower = smoother
+		linear_velocity = linear_velocity.lerp(target_vel, smoothing * delta)
 	else:
 		# Free flight with omnidirectional movement
 		var direction := Vector2.ZERO
@@ -283,18 +616,28 @@ func _handle_fly_mode(delta: float) -> void:
 		
 		if direction != Vector2.ZERO:
 			direction = direction.normalized()
-			apply_central_force(direction * FLY_FORCE)
+			# Smooth acceleration toward target velocity
+			var target_velocity = direction * FLY_MAX_SPEED
+			var acceleration = 6.0  # How quickly to accelerate to target
+			linear_velocity = linear_velocity.lerp(target_velocity, acceleration * delta)
 		else:
-			# Apply damping when no input
-			if linear_velocity.length() > 10:
-				apply_central_force(-linear_velocity.normalized() * FLY_FORCE * 0.5)
+			# Smooth deceleration when no input
+			var deceleration = 4.0  # How quickly to slow down
+			linear_velocity = linear_velocity.lerp(Vector2.ZERO, deceleration * delta)
 
 
 func _clamp_velocity() -> void:
 	var max_spd = FLY_MAX_SPEED if is_fly_mode else MAX_SPEED
+	var was_extreme = abs(linear_velocity.x) > max_spd * 2 or abs(linear_velocity.y) > 1000
+	
+	if was_extreme and debug_movement:
+		print("[VELOCITY_CLAMP] Extreme velocity detected: ", snapped(linear_velocity, Vector2(1, 1)))
+	
 	if not is_fly_mode:
-		# Only clamp horizontal in platformer mode
+		# Clamp horizontal and also vertical to reasonable limits
 		linear_velocity.x = clamp(linear_velocity.x, -max_spd, max_spd)
+		# Allow more vertical for jumping/falling, but clamp extremes
+		linear_velocity.y = clamp(linear_velocity.y, -1000, 1000)
 	else:
 		# Clamp total velocity in fly mode
 		if linear_velocity.length() > max_spd:
@@ -302,13 +645,16 @@ func _clamp_velocity() -> void:
 
 
 func _is_on_floor() -> bool:
+	# Slope threshold matching _integrate_forces: 75 degrees from horizontal
+	const FLOOR_THRESHOLD = -0.259  # cos(75°)
+	
 	# Use PhysicsDirectBodyState2D for contact detection
 	var state = PhysicsServer2D.body_get_direct_state(get_rid())
 	if state and state.get_contact_count() > 0:
 		for i in range(state.get_contact_count()):
 			var contact_normal = state.get_contact_local_normal(i)
-			# If normal points up, we're resting on something below
-			if contact_normal.y < -0.5:
+			# If normal points up enough, we're resting on a climbable surface
+			if contact_normal.y < FLOOR_THRESHOLD:
 				return true
 	
 	# Fallback to raycast

@@ -1,7 +1,8 @@
-[gd_scene load_steps=4 format=3 uid="uid://c1234568aa0a"]
+[gd_scene load_steps=5 format=3 uid="uid://c1234568aa0a"]
 
 [ext_resource type="Script" uid="uid://ct5h6rvaoku4x" path="res://scripts/player_controller.gd" id="1_player"]
 [ext_resource type="Texture2D" uid="uid://bk8v7x8h8r7qp" path="res://assets/Asset Packs/Characters/Basic Charakter Spritesheet.png" id="2_sprite"]
+[ext_resource type="PhysicsMaterial" path="res://resources/player_physics_material.tres" id="3_physics"]
 
 [sub_resource type="CapsuleShape2D" id="CapsuleShape2D_player"]
 radius = 8.0
@@ -11,6 +12,7 @@ height = 16.0
 collision_layer = 1
 collision_mask = 13
 mass = 1.5
+physics_material_override = ExtResource("3_physics")
 gravity_scale = 1.0
 lock_rotation = true
 freeze = false
