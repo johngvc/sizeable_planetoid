@@ -48,7 +48,7 @@ func get_mass_contribution() -> float:
 	var density = 1.0
 	if material != null:
 		density = material.density
-	return get_area() * density * 0.02  # Same multiplier as draw_manager
+	return get_area() * density * 0.008  # Mass = area × density × 0.008
 
 
 func get_centroid() -> Vector2:

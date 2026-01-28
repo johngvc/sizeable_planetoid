@@ -780,50 +780,49 @@ func _on_body_entered(body: Node) -> void:
 
 
 func _process_continuous_push(delta: float) -> void:
-	# Update cooldowns
-	var rids_to_remove: Array = []
-	for rid in push_cooldowns:
-		push_cooldowns[rid] -= delta
-		if push_cooldowns[rid] <= 0:
-			rids_to_remove.append(rid)
-	for rid in rids_to_remove:
-		push_cooldowns.erase(rid)
+	# Get horizontal input for continuous push
+	var horizontal_input = Input.get_axis("ui_left", "ui_right")
+	if horizontal_input == 0:
+		horizontal_input = Input.get_axis("move_left", "move_right")
 	
 	# Process objects we're currently in contact with
 	for body in objects_being_pushed:
 		if not is_instance_valid(body) or is_grabbing:
 			continue
 		
-		var rid = body.get_rid()
-		
-		# Skip if on cooldown
-		if push_cooldowns.has(rid):
-			continue
-		
-		# Only push if we're actively moving toward the object
 		var to_body = (body.global_position - global_position).normalized()
-		var velocity_toward = linear_velocity.dot(to_body)
 		
-		if velocity_toward > 10:  # Moving toward object at reasonable speed
-			_apply_push_force(body)
-			push_cooldowns[rid] = PUSH_COOLDOWN_TIME
+		# VELOCITY-MATCHED PUSH: Keep object moving with player, not away from player
+		# This creates a "leaning into" push feel rather than "kicking" feel
+		if horizontal_input != 0:
+			var push_dir_matches_input = sign(to_body.x) == sign(horizontal_input)
+			if push_dir_matches_input:
+				_apply_velocity_matched_push(body, horizontal_input, delta)
 
 
-func _apply_push_force(body: RigidBody2D) -> void:
-	# Calculate push direction from player to object
-	var push_direction = (body.global_position - global_position).normalized()
+func _apply_velocity_matched_push(body: RigidBody2D, input_dir: float, delta: float) -> void:
+	"""Apply force to make pushed object match player velocity - keeps contact while pushing"""
+	# Target: object should move at player's velocity (stay in contact)
+	var target_velocity_x = linear_velocity.x
+	var current_velocity_x = body.linear_velocity.x
+	var velocity_diff = target_velocity_x - current_velocity_x
 	
-	# Calculate push force based on player's velocity
-	var push_magnitude = linear_velocity.length() * PUSH_FORCE_MULTIPLIER
-	var push_force = push_direction * push_magnitude * mass
+	# Apply force proportional to the velocity difference
+	# This accelerates the object to match player speed, not exceed it
+	var push_stiffness = 15.0  # How quickly object matches player velocity
+	var push_force_x = velocity_diff * body.mass * push_stiffness
 	
-	# Apply force to the object
-	body.apply_central_impulse(push_force)
-	print("[PUSH] Applied force ", snapped(push_force.length(), 0.1), " to ", body.name, " dir=", snapped(push_direction, Vector2(0.01, 0.01)))
+	# Also apply a base push force in case player is stationary but pressing into object
+	var base_push = input_dir * MOVE_FORCE * PUSH_FORCE_MULTIPLIER * 0.3
 	
-	# Check if object has circular collision for rolling
+	# Combine: velocity matching + base push
+	var total_force = Vector2(push_force_x + base_push, 0)
+	body.apply_central_force(total_force)
+	
+	# Apply rolling torque to circular objects
 	if _has_circular_collision(body):
-		_apply_roll_torque(body, push_direction)
+		var roll_torque = input_dir * abs(linear_velocity.x) * 0.5 + input_dir * 50.0
+		body.apply_torque(roll_torque)
 
 
 func _has_circular_collision(body: RigidBody2D) -> bool:

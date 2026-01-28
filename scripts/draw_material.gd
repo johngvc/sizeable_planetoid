@@ -19,9 +19,9 @@ static func create_wood() -> DrawMaterial:
 	var mat = DrawMaterial.new()
 	mat.name = "Wood"
 	mat.texture_path = "res://assets/Textures/SBS - Tiny Texture Pack 2 - 256x256/256x256/Wood/Wood_01-256x256.png"
-	mat.density = 0.8  # Light
-	mat.friction = 0.3
-	mat.bounce = 0.2
+	mat.density = 1.0  # Base reference - player can push 1x their size easily
+	mat.friction = 0.4  # Smooth wood surface
+	mat.bounce = 0.15  # Slight bounce on impact
 	return mat
 
 
@@ -39,9 +39,9 @@ static func create_metal() -> DrawMaterial:
 	var mat = DrawMaterial.new()
 	mat.name = "Metal"
 	mat.texture_path = "res://assets/Textures/SBS - Tiny Texture Pack 2 - 256x256/256x256/Metal/Metal_01-256x256.png"
-	mat.density = 5.0  # Extremely heavy
-	mat.friction = 0.2
-	mat.bounce = 0.3
+	mat.density = 12.0  # Very heavy (~12x wood) - player can push 0.1x their size easily
+	mat.friction = 0.3  # Smooth polished metal surface
+	mat.bounce = 0.4  # Metal bounces well on impact
 	return mat
 
 
@@ -59,9 +59,9 @@ static func create_plaster() -> DrawMaterial:
 	var mat = DrawMaterial.new()
 	mat.name = "Plaster"
 	mat.texture_path = "res://assets/Textures/SBS - Tiny Texture Pack 2 - 256x256/256x256/Plaster/Plaster_01-256x256.png"
-	mat.density = 0.4  # Very light and easy to push
-	mat.friction = 0.25
-	mat.bounce = 0.15
+	mat.density = 0.5  # Lighter than wood - player can push 2x their size easily
+	mat.friction = 0.5  # Rough drywall-like surface
+	mat.bounce = 0.05  # Absorbs impact, minimal bounce
 	return mat
 
 

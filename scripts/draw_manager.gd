@@ -912,7 +912,7 @@ func create_physics_body_from_polygon(polygon: PackedVector2Array, material: Dra
 		var density = 1.0
 		if material != null:
 			density = material.density
-		physics_body.mass = max(5.0, area * density * 0.02)  # Increased minimum mass and density multiplier
+		physics_body.mass = max(1.0, area * density * 0.008)  # Mass = area × density × 0.008, min 1.0
 		
 		# Enable continuous collision detection for stability
 		physics_body.continuous_cd = RigidBody2D.CCD_MODE_CAST_SHAPE
@@ -1237,7 +1237,7 @@ func calculate_total_mass_from_regions(regions: Array) -> float:
 	var total_mass = 0.0
 	for region in regions:
 		total_mass += region.get_mass_contribution()
-	return max(5.0, total_mass)  # Minimum mass of 5.0
+	return max(1.0, total_mass)  # Minimum mass of 1.0
 
 
 func calculate_weighted_centroid_from_regions(regions: Array) -> Vector2:
