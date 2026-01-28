@@ -7,9 +7,17 @@
 radius = 8.0
 height = 16.0
 
-[node name="Player" type="CharacterBody2D"]
+[node name="Player" type="RigidBody2D"]
 collision_layer = 1
 collision_mask = 13
+mass = 1.5
+gravity_scale = 1.0
+lock_rotation = true
+freeze = false
+can_sleep = false
+linear_damp = 0.5
+contact_monitor = true
+max_contacts_reported = 8
 script = ExtResource("1_player")
 
 [node name="CollisionShape2D" type="CollisionShape2D" parent="."]
@@ -21,3 +29,17 @@ texture = ExtResource("2_sprite")
 hframes = 4
 vframes = 6
 frame = 1
+
+[node name="GroundRayCast" type="RayCast2D" parent="."]
+enabled = true
+position = Vector2(0, 16)
+target_position = Vector2(0, 5)
+collision_mask = 13
+
+[node name="GrabArea" type="Area2D" parent="."]
+collision_layer = 0
+collision_mask = 3
+
+[node name="GrabShape" type="CollisionShape2D" parent="GrabArea"]
+position = Vector2(12, 8)
+shape = SubResource("CapsuleShape2D_player")

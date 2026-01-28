@@ -13,7 +13,7 @@ var is_toolbox_mode: bool = false
 var cursor_position: Vector2 = Vector2.ZERO
 var camera: Camera2D = null
 var use_mouse: bool = true  # Enable mouse control
-var player: CharacterBody2D = null
+var player: RigidBody2D = null
 
 # Brush shape preview
 var current_brush_shape: String = "circle"
